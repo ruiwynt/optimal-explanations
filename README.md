@@ -10,7 +10,7 @@
 
 3. Take any instance of the feature space $\mathbb{x} = {x_1, x_2, ..., x_m}$. Discard all range variables which aren't consistent with the instance's feature values. For all range variables which are left, we can define the objective function to maximise as:
 
-$$\sum_{\text{r_{ijk} not discarded}} w_{ijk}r_{ijk}$$
+$$\sum_{\text{r not discarded}} w_{ijk}r_{ijk}$$
 
 4. Construct the constraints which to be feed into MARCO (Liffiton et al., 2016), which we use as a Partial Weighted MaxSAT solver. To do this, we feed the following constraints into the solver:
   -  The constraints on $o_ij$ from Ignatiev et al. (2022).
