@@ -12,13 +12,13 @@
 
 $$\sum_{\text{r not discarded}} w_{ijk}r_{ijk}$$
 
-4. Construct the constraints which to be feed into MARCO (Liffiton et al., 2016), which we use as a Partial Weighted MaxSAT solver. To do this, we feed the following constraints into the solver:
-  -  The constraints on $o_ij$ from Ignatiev et al. (2022).
-  -  A constraint mandating that only one $r_{ijk}$ is true for each feature $i$.
+4. Construct the constraints for MARCO (Liffiton et al., 2016), which we use as a Partial Weighted MaxSAT solver. To do this, we feed the following constraints into the solver:
+    -  The constraints on $o_ij$ from Ignatiev et al. (2022).
+    -  A constraint mandating that only one $r_{ijk}$ is true for each feature $i$.
   
-5. Run MARCO to optimise the objective function in (3) subject to the constraints in (4). It will return an optimal subset of range variables $\chi = \{r_{ijk}\ |\ r_{ijk} = 1 \text{ iff objective function is maximised with constraints in the assignment}\}$.
+5. Run MARCO with the parameters defined in (3) and (4). It will return an optimal subset of range variables. This subset represents an assignment to variables $r_{ijk}$ which maximises the objective funciton subject to constraints.
 
-6. Use the Entailment Check algorithm from Ignatiev et al. (2022) to check whether or not the optimal subset is a valid explanation for the given BT model. If it is a valid explanation, then we return the optimal explanation and we are done.
+6. Use the Entailment Check from Ignatiev et al. (2022) to check whether or not the optimal subset is a valid explanation for the given BT model. If it is a valid explanation, then we return the optimal explanation and we are done.
 
 7. If the optimal subset is not a valid explanation, we construct a contrastive explanation (Ignatiev et al., 2020) from the optimal subset and feed it back into MARCO. This will block any subsets of the optimal subset from being explored by MARCO, reducing the search space.
 
