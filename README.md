@@ -8,7 +8,7 @@
 
 2. For each range variable $r_{ijk}$, calculate its weight $w_{ijk}$ as a monotone function of the interval size. For example, we can have that $w_{ijk} = \log(d_{ik} - d_{ij})$.
 
-3. Take any instance of the feature space $\mathbb{x} = {x_1, x_2, ..., x_m}$. Discard all range variables which aren't consistent with the instance's feature values. For all range variables which are left, we can define the objective function to maximise as:
+3. Take any instance of the feature space $\mathbf{x} = (x_1, x_2, ..., x_m)$. Discard all range variables which aren't consistent with the instance's feature values. For all range variables which are left, we can define the objective function to maximise as:
 
 $$\sum_{\text{r not discarded}} w_{ijk}r_{ijk}$$
 
