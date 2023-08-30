@@ -1,11 +1,12 @@
-from typing import Dict, Tuple, List, Optional
+from typing import Optional
 from z3 import *
 
+from parser import get_xgboost_thresholds
 
 DECIMAL_PREC = 99
 
 class Region:
-    def __init__(self, bounds: Optional[Dict[int, Tuple[float, float]]] = None):
+    def __init__(self, bounds: Optional[dict[int, tuple[float, float]]] = None):
         """
         bounds: {
                     <feature_id>: (<lower>, <upper>),
@@ -91,7 +92,7 @@ class FeatureSpaceInfo:
 
 
 class ExplanationProgram:
-    def __init__(self, thresholds: dict[int: list[float]]):
+    def __init__(self, thresholds: dict[int: list[float]], domains=None):
         self.n_features = len(thresholds)
         self.fs_info = FeatureSpaceInfo(thresholds)
         self.blocked_down = []
@@ -171,14 +172,11 @@ if __name__ == "__main__":
     import random
 
     random.seed(105523)
-    thresholds = {
-        i: sorted([random.uniform(0, 1000) for j in range(20)])
-        for i in range(3)
-    }
     # thresholds = {
-    #     0: [1, 2, 3],
-    #     1: [1, 2, 3],
+    #     i: sorted([random.randint(0, 1000) for j in range(20)])
+    #     for i in range(5)
     # }
+    thresholds = get_xgboost_thresholds("model.json")
     print('\n'.join([f"{i}: {thresholds[i]}" for i in thresholds.keys()]))
 
     program = ExplanationProgram(thresholds)
