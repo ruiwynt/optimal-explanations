@@ -1,102 +1,25 @@
-from typing import Optional
+import bisect
 from z3 import *
 
-from parser import get_xgboost_thresholds
-
-DECIMAL_PREC = 99
-
-class Region:
-    def __init__(self, bounds: Optional[dict[int, tuple[float, float]]] = None):
-        """
-        bounds: {
-                    <feature_id>: (<lower>, <upper>),
-                    ...
-                } 
-        
-        feature_id should start from 0.
-        lower, upper should be floats.
-        """
-        self.bounds = bounds
-        if bounds:
-            self.n_features = len(bounds.keys())
-    
-    def __repr__(self):
-        region = [
-            "%f <= x%d < %f" % (self.bounds[i][0], i, self.bounds[i][1]) 
-            for i in self.bounds.keys()
-        ]
-        return "\n".join(region)
-    
-    @classmethod
-    def from_model(cls, model, variables):
-        """Create region from z3 solver model."""
-        region = cls()
-        region.bounds = {
-            i: (
-                float(model[variables[i].lower].as_decimal(DECIMAL_PREC)), 
-                float(model[variables[i].upper].as_decimal(DECIMAL_PREC))
-            )
-            for i in variables.keys()
-        }
-        region.n_features = len(region.bounds)
-        return region
-
-
-class FeatureVariables:
-    def __init__(self, feature_id, vals):
-        """Supports real numbers. Implement categorical features sometime later."""
-        self.feature_id = feature_id
-        self.vals = vals
-        self._init_real()
-    
-    def _init_real(self):
-        self.lower = Real('x%d_l' % self.feature_id)
-        self.upper = Real('x%d_u' % self.feature_id)
-
-        self.constraints = And(
-            self._one_of(self.lower, self.vals),
-            self._one_of(self.upper, self.vals),
-            self.lower < self.upper,
-        )
-
-    def _one_of(self, x, vals):
-        return Or([x == i for i in vals])
-
-
-class FeatureSpaceInfo:
-    def __init__(self, thresholds: dict[int: list[float]], domains=None):
-        """
-        thresholds: {
-                    <feature_id>: [<threshold value>, ...],
-                    ...
-                } 
-        """
-        self.thresholds = thresholds
-
-        if domains:
-            self.domains = domains
-        else:
-            self.domains = {
-                i: (min(thresholds[i])-1, max(thresholds[i])+1)
-                for i in thresholds.keys()
-            }
-    
-    def constraint_vals(self, i):
-        return [self.domains[i][0]] + self.thresholds[i] + [self.domains[i][1]]
-    
-    def get_dmin(self, i):
-        return self.domains[i][0]
-
-    def get_dmax(self, i):
-        return self.domains[i][1]
+from entailment import EntailmentChecker
+from regions import Region, FeatureSpaceInfo, FeatureVariables
+from json_parser import Model
 
 
 class ExplanationProgram:
-    def __init__(self, thresholds: dict[int: list[float]], domains=None):
-        self.n_features = len(thresholds)
-        self.fs_info = FeatureSpaceInfo(thresholds)
+    # uping indexes
+    _f_id = 0
+    _threshold_i = 1
+    _bound_type = 2
+
+    def __init__(self, model: Model, domains=None):
+        self.model = model
+        self.entailment_checker = EntailmentChecker(model)
+        self.n_features = model.num_feature
+        self.fs_info = FeatureSpaceInfo(model.thresholds)
         self.blocked_down = []
         self.blocked_up = []
+
         self._init_program()
 
     def __repr__(self):
@@ -123,13 +46,63 @@ class ExplanationProgram:
         for var in self.vars.values():
             self.solver.add(var.constraints)
     
+    def _instance_to_region(self, instance: list[float]) -> Region:
+        bounds = {}
+        for i in range(len(instance)): 
+            thresholds = self.fs_info.thresholds[i]
+            bound_i = bisect.bisect_left(thresholds, instance[i])
+            if bound_i == len(thresholds):
+                bounds[i] = (thresholds[bound_i-2], thresholds[bound_i-1])
+            elif bound_i == 0:
+                bounds[i] = (thresholds[bound_i], thresholds[bound_i+1])
+            else:
+                bounds[i] = (thresholds[bound_i-1], thresholds[bound_i])
+        return Region(bounds)
+    
+    def explain(self, instance: list[float], c, block_score=False):
+        """Find all maximal explanations which contain the instance."""
+        region = self._instance_to_region(instance)
+        self.solver.add(
+            And([
+                And(
+                    self.vars[i].lower <= region.bounds[i][0], 
+                    self.vars[i].upper >= region.bounds[i][1]
+                )
+                for i in self.vars.keys()
+            ])
+        )
+        self.enumerate_explanations(c, block_score=block_score)
+    
+    def enumerate_explanations(self, c, block_score=False):
+        """Enumerate all maximal explanations for the given class."""
+        region = self.get_region()
+        while region:
+            if not self.entailment_checker.entails(region, c):
+                self._step_region(region, c, "down")
+                self._block_up(region)
+            else:
+                self._step_region(region, c, "up")
+                self._block_down(region)
+                if block_score:
+                    self.solver.add(self._var_score() > self.get_score(region))
+                self._print_region(region)
+            region = self.get_region()
+        self._print_region(self.region)
+    
     def get_region(self) -> Region:
         if self.solver.check() == unsat:
             return None
         
-        return Region.from_model(self.solver.model(), self.vars)
+        self.region = Region.from_model(self.solver.model(), self.vars)
+        return self.region
+    
+    def _print_region(self, region):
+        print(f"-- ENTAILS --")
+        print(region)
+        print(f"Score: {self.get_score(region)}")
+        print("-------------")
 
-    def block_down(self, region: Region):
+    def _block_down(self, region: Region):
         """Block all regions which are contained within the given region."""
         self.blocked_down.append(region)
 
@@ -140,9 +113,7 @@ class ExplanationProgram:
             ])
         )
 
-        self.solver.add(self._var_score() > self.get_score(region))
-
-    def block_up(self, region: Region):
+    def _block_up(self, region: Region):
         """Block all regions which contain the given region."""
         self.blocked_up.append(region)
 
@@ -152,6 +123,60 @@ class ExplanationProgram:
                 for i in self.vars.keys()
             ])
         )
+    
+    def _step_region(self, region: Region, c: str, mode: str):
+        if mode not in ("up", "down"):
+            raise ValueError(f"error: invalid mode {mode}")
+        queue = [
+            (
+                f_id,
+                bisect.bisect_left(
+                    self.fs_info.thresholds[f_id], 
+                    region.bounds[f_id][side]
+                ),
+                side
+            )
+            for side in (0, 1) for f_id in region.bounds.keys()
+        ]
+
+        while len(queue) > 0:
+            step = queue.pop(0)
+            f_id = step[0]
+            threshold_i = step[1]
+            bound_type = step[2]
+            t_list = self.fs_info.thresholds[f_id]
+
+            # Cannot expand bounds any further
+            if threshold_i <= 0 or threshold_i >= len(t_list)-1:
+                continue
+
+            # Cannot down bounds any further
+            if bound_type == 1 and t_list[threshold_i-1] == region.bounds[f_id][0] or \
+                bound_type == 0 and t_list[threshold_i+1] == region.bounds[f_id][1]:
+                continue
+
+            original_bound = region.bounds[f_id][:]  # Copy
+            if bound_type == 0:
+                i_step = 1 if mode == "down" else -1
+                region.bounds[f_id] = (
+                    t_list[threshold_i+i_step],
+                    region.bounds[f_id][1]
+                )
+            else:
+                i_step = 1 if mode == "up" else -1
+                region.bounds[f_id] = (
+                    region.bounds[f_id][0],
+                    t_list[threshold_i+i_step]
+                )
+            
+            entails = self.entailment_checker.entails(region, c)
+            if entails and mode == "down" or not entails and mode == "up":
+                region.bounds[f_id] = original_bound
+            else:
+                threshold_i = threshold_i + i_step
+                queue.append(
+                    (f_id, threshold_i, bound_type)
+                )
     
     def get_score(self, region: Region):
         """Sum of normalised feature covers."""
@@ -166,31 +191,19 @@ class ExplanationProgram:
             (v.upper-v.lower)/(self.fs_info.get_dmax(v.feature_id) - self.fs_info.get_dmin(v.feature_id))
             for v in self.vars.values()
         ])
-
+    
+    def reset(self):
+        pass
+    
 
 if __name__ == "__main__":
     import random
+    import json
 
-    random.seed(105523)
-    # thresholds = {
-    #     i: sorted([random.randint(0, 1000) for j in range(20)])
-    #     for i in range(5)
-    # }
-    thresholds = get_xgboost_thresholds("model.json")
-    print('\n'.join([f"{i}: {thresholds[i]}" for i in thresholds.keys()]))
+    with open("model.json", "r") as f:
+        model = Model(json.loads(f.read()))
+    # print('\n'.join([f"{i}: {model.thresholds[i]}" for i in model.thresholds.keys()]))
 
-    program = ExplanationProgram(thresholds)
-
-    region = program.get_region()
-    while region:
-        if random.randint(0, 1) == 1:
-            print("Blocking Up")
-            program.block_up(region)
-        else:
-            program.block_down(region)
-            print(f"Score: {program.get_score(region)}")
-        prev_region = region
-        region = program.get_region()
-    # print(program)
-    print(prev_region)
-    print(program.get_score(prev_region))
+    instance = [7.4, 2.8, 6.1, 1.9]
+    program = ExplanationProgram(model)
+    program.explain(instance, 2, block_score=False)
