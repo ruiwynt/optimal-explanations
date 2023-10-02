@@ -1,4 +1,4 @@
-from src.stepper import RegionStepper
+from src.traverser import LatticeTraverser
 from src.regions import Region
 
 def test():
@@ -13,6 +13,6 @@ def test():
                     return True
             return False
     
-    stepper = RegionStepper(TempEntailer(), thresholds)
+    stepper = LatticeTraverser(TempEntailer(), thresholds)
     stepper.shrink(r, "1")
     

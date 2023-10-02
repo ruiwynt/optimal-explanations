@@ -37,11 +37,10 @@ class EntailmentChecker:
             return ws.index(max(ws))
 
     def entails(self, r: Region, out):
-        if out not in self.grp_vars.keys():
-            print(f"{out} not in valid classes {self.grp_vars.keys()}")
-            return
-
         objective = self.model.objective
+        if out not in self.grp_vars.keys() and "multi" in objective:
+            raise ValueError(f"{out} not in valid classes {self.grp_vars.keys()}")
+
         if objective == "binary:logistic":
             w = Sum(self.grp_vars[0])
             objective_c = w > 0 if out == 0 else w < 0

@@ -62,7 +62,7 @@ class SeedGenerator:
                     self.vars[i].lower > r.bounds[i][0], 
                     self.vars[i].upper < r.bounds[i][1]
                 )
-                for i in self.vars.keys()
+                for i in r.bounds.keys()
             ])
         )
 
@@ -74,7 +74,7 @@ class SeedGenerator:
                     self.vars[i].lower < r.bounds[i][0], 
                     self.vars[i].upper > r.bounds[i][1]
                 )
-                for i in self.vars.keys()
+                for i in r.bounds.keys()
             ])
         )
 

@@ -6,7 +6,7 @@ from .entailment import EntailmentChecker
 from .regions import Region
 
 
-class RegionStepper:
+class LatticeTraverser:
     def __init__(
             self, 
             entailer: EntailmentChecker, 
@@ -32,6 +32,23 @@ class RegionStepper:
 
     def shrink(self, r: Region, c: str):
         self._bsearch_step(r, c, "shrink")
+    
+    def eliminate_vars(self, r: Region):
+        to_remove = set()
+        c = self.entailer.predict([
+            (r.bounds[i][0] + r.bounds[i][1])/2 if i in r.bounds.keys() else -1 
+            for i in range(self.entailer.model.num_feature)
+        ])
+        for f_id in r.bounds.keys():
+            b = r.bounds[f_id]
+            d = self.domains[f_id]
+            r.bounds[f_id] = (d[0], d[len(d)-1])
+            if not self.entailer.entails(r, c):
+                r.bounds[f_id] = b
+            else:
+                to_remove.add(f_id)
+        for f_id in to_remove:
+            del r.bounds[f_id]
 
     def _bsearch_step(self, r: Region, c: str, mode: str):
         for (f_id, side) in ((i, j) for i in self.domains.keys() for j in (0, 1)):

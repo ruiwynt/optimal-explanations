@@ -10,7 +10,7 @@ from .entailment import EntailmentChecker
 from .regions import Region, FeatureSpaceInfo
 from .model import Model
 from .generators.z3_generator import SeedGenerator
-from .stepper import RegionStepper
+from .traverser import LatticeTraverser
 
 
 class ExplanationProgram:
@@ -23,7 +23,7 @@ class ExplanationProgram:
         self.seed_gen = seed_gen
         self.entailer = EntailmentChecker(model)
         self.generator = SeedGenerator(self.fs_info, method=seed_gen)
-        self.stepper = RegionStepper(self.entailer, self.fs_info.domains)
+        self.traverser = LatticeTraverser(self.entailer, self.fs_info.domains)
 
         self.total_blocked = 0
         self.n_entailing = 0
@@ -51,8 +51,8 @@ class ExplanationProgram:
         start_t = time.perf_counter()
         r = self._instance_to_region(x)
         c = self.entailer.predict(x)
-        self.stepper.must_contain(r)
-        self.stepper.grow(r, c) 
+        self.traverser.must_contain(r)
+        self.traverser.grow(r, c) 
         end_t = time.perf_counter()
         self._explain_t = end_t - start_t
         self._sat_calls = self.entailer.oracle_calls
@@ -63,27 +63,25 @@ class ExplanationProgram:
         r = self._instance_to_region(x)
         c = self.entailer.predict(x)
         self.generator.must_contain(r)
-        self.stepper.must_contain(r)
+        self.traverser.must_contain(r)
         t1 = time.perf_counter()
         r = self.generator.get_seed()
         t2 = time.perf_counter()
         self._seed_gen_t = t2 - t1
         while r:
             if not self.entailer.entails(r, c):
-                # if self.seed_gen == "rand":
-                #     t1 = time.perf_counter()
-                #     self.stepper.shrink(r, c)
-                #     t2 = time.perf_counter()
-                #     self._traversal_t = t2 - t1
-                # self.generator.block_up(r)
+                t1 = time.perf_counter()
                 r = self._instance_to_region(self.entailer.cexample)
+                self.traverser.eliminate_vars(r)
+                t2 = time.perf_counter()
+                self._traversal_t = t2 - t1
                 self.generator.block_up(r)
                 self.n_nonentailing += 1
                 if block_score:
                     self._check_entailing_adjacents(r, c)
             else:
                 t1 = time.perf_counter()
-                self.stepper.grow(r, c)
+                self.traverser.grow(r, c)
                 t2 = time.perf_counter()
                 self._traversal_t = t2 - t1
                 self.generator.block_down(r)
@@ -160,7 +158,7 @@ class ExplanationProgram:
             for side in (0, 1):
                 d = self.fs_info.get_domain(f_id)
                 b = r.bounds[f_id]
-                sb = self.stepper.search_bounds[f_id]
+                sb = self.traverser.search_bounds[f_id]
                 i = d.index(b[0]) if side == 0 else d.index(b[1])
 
                 if side == 0 and i+1 < d.index(b[1]) and i+1 <= sb[0]:
@@ -173,7 +171,7 @@ class ExplanationProgram:
                 score = self.get_score(r)
                 if score > self.max_score:
                     r2 = deepcopy(r)
-                    self.stepper.grow(r2, c)
+                    self.traverser.grow(r2, c)
                     self.generator.block_down(r2)
                     self.generator.block_score(score)
                     self.n_entailing += 1
