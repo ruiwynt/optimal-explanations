@@ -2,7 +2,9 @@
 
 ## 1. Introduction
 
-Given a boosted tree and data instance, computes the optimal explanation 
+Given a boosted tree and data instance, computes the optimal explanative region.
+
+Supports XGBoost trees trained with the `binary::logistic` and `multi::softprob` objectives.
 
 ## 2. Background
 
@@ -83,3 +85,16 @@ Ignatiev, A., Narodytska, N., Asher, N., & Marques-Silva, J. (2020). On Relating
 ## 5. Interesting things I came across
 
 https://arxiv.org/pdf/2303.09271v1.pdf uses MARCO to calculate minimal explanations and minimum explanations. Claims to acheve a 2400x speedup compared to current SoTA methods.
+
+## 6. TODO
+
+- Restructure code to account for classifiers which don't use a specific feature.
+- Implement PySAT encoder after making region_finder modular.
+- Command line utility for using example models.
+- Benchmark performance.
+- Improve logging, dump log to file.
+
+- Save and load cache.
+- Smart search of volume space, binary search the range of possible volumes from up.
+- Try not blocking the score and seeing if there's any performance difference.
+- Try MiniZinc; transcendental function support?

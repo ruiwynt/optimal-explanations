@@ -4,9 +4,6 @@ support is experimental, output schema is subject to change in the future.
 
 Taken from xgboost/demo/json-model/json_parser.py
 '''
-import json
-import argparse
-
 
 class Tree:
     '''A tree built by XGBoost.'''
@@ -107,6 +104,7 @@ class Model:
         # A field encoding which output group a tree belongs
         self.tree_info = model['learner']['gradient_booster']['model'][
             'tree_info']
+        self.objective = model['learner']['objective']['name']
         self.thresholds = {}
 
 
@@ -118,9 +116,9 @@ class Model:
 
         # Load the trees
         self.num_trees = int(model_shape['num_trees'])
-        self.leaf_size = int(model_shape['size_leaf_vector'])
+        # self.leaf_size = int(model_shape['size_leaf_vector'])
         # Right now XGBoost doesn't support vector leaf yet
-        assert self.leaf_size == 0, str(self.leaf_size)
+        # assert self.leaf_size == 0, str(self.leaf_size)
 
         trees = []
         for i in range(self.num_trees):
@@ -155,10 +153,11 @@ class Model:
                     loss_changes[node_id], sum_hessian[node_id],
                     base_weights[node_id]
                 ])
-                if not split_ind in self.thresholds.keys():
-                    self.thresholds[split_ind] = set([split_val])
-                else:
-                    self.thresholds[split_ind].add(split_val)
+                if not left_children[node_id] == -1:
+                    if not split_ind in self.thresholds.keys():
+                        self.thresholds[split_ind] = set([split_val])
+                    else:
+                        self.thresholds[split_ind].add(split_val)
 
             tree = Tree(tree_id, nodes, stats)
             trees.append(tree)
@@ -173,17 +172,3 @@ class Model:
         for i, tree in enumerate(self.trees):
             print('tree_id:', i)
             print(tree)
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Demonstration for loading and printing XGBoost model.')
-    parser.add_argument('--model',
-                        type=str,
-                        required=True,
-                        help='Path to JSON model file.')
-    args = parser.parse_args()
-    with open(args.model, 'r') as fd:
-        model = json.load(fd)
-    model = Model(model)
-    model.print_model()

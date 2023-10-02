@@ -1,6 +1,12 @@
 # Z3 Theorem Solver
 z3/
 
+# Benchmark data
+data/*
+
+# Stats
+analyse.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

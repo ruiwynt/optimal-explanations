@@ -1,6 +1,7 @@
 from z3 import *
 
 from typing import Optional
+from math import isclose
 
 
 DECIMAL_PREC = 99
@@ -22,13 +23,47 @@ class Region:
     
     def __repr__(self):
         region = [
-            "%f < x%d <= %f" % (self.bounds[i][0], i, self.bounds[i][1]) 
+            "%f <= x%d < %f" % (self.bounds[i][0], i, self.bounds[i][1]) 
             for i in sorted(self.bounds.keys())
         ]
         return "\n".join(region)
     
+    def __eq__(self, r):
+        for f_id in self.bounds.keys():
+            if f_id not in r.bounds.keys():
+                return False
+        for f_id, b in r.bounds.items():
+            if f_id not in self.bounds.keys():
+                return False 
+            if not isclose(b[0], self.bounds[f_id][0]) or \
+                not isclose(b[1], self.bounds[f_id][1]):
+                return False
+        return True
+
+    def contained_in(self, r):
+        """True iff this region is contained within r"""
+        for f_id in self.bounds.keys():
+            if not f_id in r.bounds.keys():
+                continue
+            b = self.bounds[f_id]
+            rb = r.bounds[f_id]
+            if b[0] < rb[0] or b[1] > rb[1]:
+                return False
+        return True
+    
+    def contains(self, r):
+        """True iff this region contains r"""
+        for f_id in self.bounds.keys():
+            if not f_id in r.bounds.keys():
+                return False
+            b = self.bounds[f_id]
+            rb = r.bounds[f_id]
+            if b[0] > rb[0] or b[1] < rb[1]:
+                return False
+        return True
+    
     @classmethod
-    def from_model(cls, model, variables):
+    def from_z3model(cls, model, variables):
         """Create region from z3 solver model."""
         region = cls()
         region.bounds = {
@@ -42,7 +77,7 @@ class Region:
         return region
 
 
-class FeatureVariables:
+class LimitVariables:
     def __init__(self, feature_id, vals):
         """Supports real numbers. Implement categorical features sometime later."""
         self.feature_id = feature_id
@@ -64,7 +99,7 @@ class FeatureVariables:
 
 
 class FeatureSpaceInfo:
-    def __init__(self, thresholds: dict[int: list[float]], domains=None):
+    def __init__(self, thresholds: dict[int: list[float]], limits=None):
         """
         thresholds: {
                     <feature_id>: [<threshold value>, ...],
@@ -73,19 +108,30 @@ class FeatureSpaceInfo:
         """
         self.thresholds = thresholds
 
-        if domains:
-            self.domains = domains
+        if limits:
+            self.limits = limits
+            for k in self.thresholds.keys():
+                if not k in limits.keys():
+                    raise KeyError(f"limits dict doesn't contain key {k}")
         else:
-            self.domains = {
+            self.limits = {
                 i: (min(thresholds[i])-100, max(thresholds[i])+100)
                 for i in thresholds.keys()
             }
+
+        self.domains = {
+            i: [self.limits[i][0]] + self.thresholds[i] + [self.limits[i][1]]
+            for i in thresholds.keys()
+        }
+        
+    def keys(self):
+        return self.thresholds.keys()
     
-    def constraint_vals(self, i):
-        return [self.domains[i][0]] + self.thresholds[i] + [self.domains[i][1]]
+    def get_domain(self, i):
+        return self.domains[i]
     
     def get_dmin(self, i):
-        return self.domains[i][0]
+        return self.limits[i][0]
 
     def get_dmax(self, i):
-        return self.domains[i][1]
+        return self.limits[i][1]
