@@ -9,20 +9,24 @@ from z3 import *
 from .entailment import EntailmentChecker
 from .regions import Region, FeatureSpaceInfo
 from .model import Model
-from .generators.z3_generator import SeedGenerator
+from .generators.z3_generator import SeedGenerator as Z3Generator
+from .generators.rc2_generator import SeedGenerator as Rc2Generator
 from .traverser import LatticeTraverser
 
 
 class ExplanationProgram:
-    _seed_gens = ["rand", "min"]
+    _seed_gens = ["rand", "min", "max"]
 
     def __init__(self, model: Model, limits=None, seed_gen="rand"):
         if seed_gen not in self._seed_gens:
             raise ArgumentError(f"{seed_gen} not a valid seed generation method")
         self.fs_info = FeatureSpaceInfo(model.thresholds, limits=limits)
-        self.seed_gen = seed_gen
         self.entailer = EntailmentChecker(model)
-        self.generator = SeedGenerator(self.fs_info, method=seed_gen)
+        if seed_gen == "rand" or seed_gen == "min":
+            self.generator = Z3Generator(self.fs_info, method=seed_gen)
+        elif seed_gen == "max":
+            # TODO: Rc2Generator doesn't generate largest region as first seed
+            self.generator = Rc2Generator(self.fs_info.domains)
         self.traverser = LatticeTraverser(self.entailer, self.fs_info.domains)
 
         self.total_blocked = 0

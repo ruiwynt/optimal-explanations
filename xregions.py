@@ -133,6 +133,11 @@ def main():
                         default=False,
                         required=False,
                         help="Whether or not to block score when enumerating.")
+    parser.add_argument("--seed-gen",
+                        type=str,
+                        default="rand",
+                        required=False,
+                        help="Seed generation method: (rand|min|max)")
     args = parser.parse_args()
 
     if args.benchmark_all:
@@ -159,7 +164,7 @@ def main():
     lims = get_lims(f"models/{args.model}.lims")
     logging.info(f"successfully initialised domain limits models/{args.model}.json")
     
-    seed_gen="rand"
+    seed_gen = args.seed_gen
     block_score = args.block_score
 
     instance = args.explain if args.explain is not None else args.enumerate
