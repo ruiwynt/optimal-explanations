@@ -63,11 +63,9 @@ class LatticeTraverser:
             elif side == 1 and mode == "grow":
                 d = d[j:]
             elif side == 0 and mode == "shrink":
-                j = min(self.search_bounds[f_id][0]+1, j)
                 d = d[i:j]
             elif side == 1 and mode == "shrink":
-                i = max(self.search_bounds[f_id][1], i+1)
-                d = d[i:j+1]
+                d = d[i+1:j+1]
                 d.reverse()
 
             left = 0

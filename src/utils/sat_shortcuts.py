@@ -4,6 +4,8 @@ class Formula:
 
 class Not(Formula):
     def __init__(self, formula):
+        if formula == []:
+            raise ValueError("empty list passed into formula")
         self.formula = formula
     
     def __str__(self):
@@ -16,7 +18,7 @@ class Not(Formula):
     
     def to_cnf(self):
         if type(self.formula) == int:
-            return [-self.formula]
+            return [[-self.formula]]
         elif type(self.formula) == list:
             return And([-x for x in self.formula]).to_cnf()
         cnf = []
@@ -26,6 +28,8 @@ class Not(Formula):
 
 class Or(Formula):
     def __init__(self, formulas):
+        if formulas == []:
+            raise ValueError("empty list passed into formula")
         self.formulas = formulas
     
     def __str__(self):
@@ -52,21 +56,11 @@ class Or(Formula):
             else:
                 cnf = [A + B for A in f.to_cnf() for B in cnf]
         return cnf
-    
-    def _distribute_clauses(self, clauses):
-        cnf = [clauses.pop(0)]
-        while len(clauses) > 0:
-            A = clauses.pop(0)
-            new_cnf = []
-            while len(cnf) > 0:
-                B = cnf.pop(0)
-                for x in A:
-                    new_cnf.append([x] + B)
-            cnf = new_cnf
-        return cnf
 
 class And(Formula):
     def __init__(self, formulas):
+        if formulas == []:
+            raise ValueError("empty list passed into formula")
         self.formulas = formulas
 
     def __str__(self):
@@ -83,13 +77,15 @@ class And(Formula):
             if type(f) == int:
                 enc.append([f])
             elif type(f) == list:
-                enc += f
+                enc.append(f)
             else:
                 enc += f.to_cnf()
         return enc
 
-class If(Formula):
+class Implies(Formula):
     def __init__(self, p, q):
+        if p == [] or q == []:
+            raise ValueError("empty list passed into formula")
         self.p = self._check_arg(p)
         self.q = self._check_arg(q)
 
@@ -110,6 +106,8 @@ class If(Formula):
 
 class Iff(Formula):
     def __init__(self, p, q):
+        if p == [] or q == []:
+            raise ValueError("empty list passed into formula")
         self.p = self._check_arg(p)
         self.q = self._check_arg(q)
 
@@ -126,4 +124,38 @@ class Iff(Formula):
             return p
     
     def to_cnf(self):
-        return And([If(self.p, self.q), If(self.q, self.p)]).to_cnf()
+        return And([Implies(self.p, self.q), Implies(self.q, self.p)]).to_cnf()
+
+class EqualsOne(Formula):
+    def __init__(self, literals):
+        if not type(literals) == list:
+            raise ValueError("EqualsOne only implemented for lists of literals")
+        self.literals = literals
+    
+    def __str__(self):
+        s = ""
+        for x in self.literals:
+            s += f"{x} + "
+        return s[:-2] + "= one"
+    
+    def to_cnf(self):
+        l = self.literals
+        to_disjunct = []
+        for x in self.literals:
+            c = [-a for a in self.literals]
+            c[c.index(-x)] = x
+            to_disjunct.append(And(c))
+        cnf = And([Or(self.literals), Or(to_disjunct)]).to_cnf()
+        cleaned_cnf = []
+        for clause in cnf:
+            seen = set()
+            skip = False
+            for x in clause:
+                if -x in seen:
+                    skip = True
+                    break
+                else:
+                    seen.add(x)
+            if not skip:
+                cleaned_cnf.append(list(set(clause)))
+        return cleaned_cnf

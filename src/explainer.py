@@ -1,8 +1,9 @@
 import time
 import bisect
 import logging
-from math import prod, isclose
+from math import prod, isclose, log
 from copy import deepcopy
+from decimal import Decimal, getcontext
 
 from z3 import *
 
@@ -11,22 +12,24 @@ from .regions import Region, FeatureSpaceInfo
 from .model import Model
 from .generators.z3_generator import SeedGenerator as Z3Generator
 from .generators.rc2_generator import SeedGenerator as Rc2Generator
+from .generators.greedy_generator import SeedGenerator as GreedyGenerator
 from .traverser import LatticeTraverser
 
 
 class ExplanationProgram:
-    _seed_gens = ["rand", "min", "max"]
-
     def __init__(self, model: Model, limits=None, seed_gen="rand"):
-        if seed_gen not in self._seed_gens:
-            raise ArgumentError(f"{seed_gen} not a valid seed generation method")
         self.fs_info = FeatureSpaceInfo(model.thresholds, limits=limits)
         self.entailer = EntailmentChecker(model)
+        self.seed_gen = seed_gen
         if seed_gen == "rand" or seed_gen == "min":
             self.generator = Z3Generator(self.fs_info, method=seed_gen)
         elif seed_gen == "max":
             # TODO: Rc2Generator doesn't generate largest region as first seed
-            self.generator = Rc2Generator(self.fs_info.domains)
+            self.generator = Rc2Generator(self.fs_info)
+        elif seed_gen == "greedy":
+            self.generator = GreedyGenerator(self.fs_info)
+        else:
+            raise ArgumentError(f"{seed_gen} not a valid seed generation method")
         self.traverser = LatticeTraverser(self.entailer, self.fs_info.domains)
 
         self.total_blocked = 0
@@ -34,6 +37,7 @@ class ExplanationProgram:
         self.n_nonentailing = 0
         self.max_score = -1
         self.max_region = None
+        self.seed_score = -1
 
         self._explain_t = -1
         self._sat_calls = -1
@@ -53,30 +57,37 @@ class ExplanationProgram:
     def explain(self, x: list[float]):
         """Find a maximal explanation which contain the instance x."""
         start_t = time.perf_counter()
-        r = self._instance_to_region(x)
+        self.init_region = self._instance_to_region(x)
         c = self.entailer.predict(x)
-        self.traverser.must_contain(r)
-        self.traverser.grow(r, c) 
+        self.traverser.must_contain(self.init_region)
+        self.traverser.grow(self.init_region, c) 
         end_t = time.perf_counter()
         self._explain_t = end_t - start_t
         self._sat_calls = self.entailer.oracle_calls
-        return r
+        return self.init_region
     
     def enumerate_explanations(self, x: list[float], block_score=False):
         """Enumerate all maximal explanations for the given class."""
-        r = self._instance_to_region(x)
+        self.init_region = self._instance_to_region(x)
         c = self.entailer.predict(x)
-        self.generator.must_contain(r)
-        self.traverser.must_contain(r)
+        self.generator.must_contain(self.init_region)
+        self.traverser.must_contain(self.init_region)
         t1 = time.perf_counter()
         r = self.generator.get_seed()
         t2 = time.perf_counter()
         self._seed_gen_t = t2 - t1
         while r:
+            # logging.info(f"{self.get_score(r)} | {self.lg_score(r)}")
+            score = self.get_score(r)
+            self.seed_score = score
             if not self.entailer.entails(r, c):
+                # logging.info(f"Non entailing seed generated")
+                # logging.info(f"\n{r}")
                 t1 = time.perf_counter()
                 r = self._instance_to_region(self.entailer.cexample)
                 self.traverser.eliminate_vars(r)
+                # logging.info(f"Eliminated features\n{r}")
+                # logging.info(f"\n{r}")
                 t2 = time.perf_counter()
                 self._traversal_t = t2 - t1
                 self.generator.block_up(r)
@@ -84,10 +95,12 @@ class ExplanationProgram:
                 if block_score:
                     self._check_entailing_adjacents(r, c)
             else:
-                t1 = time.perf_counter()
-                self.traverser.grow(r, c)
-                t2 = time.perf_counter()
-                self._traversal_t = t2 - t1
+                if not (self.seed_gen == "max" or self.seed_gen == "greedy"):
+                    t1 = time.perf_counter()
+                    self.traverser.grow(r, c)
+                    t2 = time.perf_counter()
+                    self._traversal_t = t2 - t1
+                self._drop_features(r)
                 self.generator.block_down(r)
                 score = self.get_score(r)
                 if block_score:
@@ -95,8 +108,16 @@ class ExplanationProgram:
                 if score > self.max_score:
                     self.max_score = score
                     self.max_region = r
+                self.seed_score = score
                 self.n_entailing += 1
-            if (self.n_entailing + self.n_nonentailing) % 10 == 0:
+                if self.seed_gen == "max" or self.seed_gen == "greedy":
+                    logging.info(f"Entailing Seed #{self.n_entailing} | {score:.5f} ")
+                    # logging.info(f"\n{r}")
+                    if self.n_entailing == 1:
+                        self._log_stats()
+                        logging.info(f"MAX SCORE: {self.max_score}\n{self.max_region}")
+                        return None
+            if (self.n_entailing + self.n_nonentailing) % 1 == 0:
                 self._log_stats()
             self._sat_calls = self.entailer.oracle_calls
             yield r
@@ -108,20 +129,17 @@ class ExplanationProgram:
         logging.info(f"MAX SCORE: {self.max_score}\n{self.max_region}")
 
     def get_score(self, r: Region):
-        interval_sizes = [
-            r.bounds[i][1]-r.bounds[i][0] 
+        numerator = prod([
+            Decimal(r.bounds[i][1])-Decimal(r.bounds[i][0])
             for i in r.bounds.keys()
-        ]
-
-        domain_sizes = [
-            self.fs_info.get_dmax(i)-self.fs_info.get_dmin(i)
-            for i in r.bounds.keys()
-        ]
-
-        return prod([
-            interval_sizes[i] / domain_sizes[i]
-            for i in range(len(interval_sizes))
         ])
+
+        denominator = prod([
+            Decimal(self.fs_info.get_dmax(i))-Decimal(self.fs_info.get_dmin(i))
+            for i in r.bounds.keys()
+        ])
+
+        return numerator/denominator
     
     def reset(self):
         self.generator.reset()
@@ -131,7 +149,8 @@ class ExplanationProgram:
         s += f"{self.n_entailing + self.n_nonentailing } "
         s += f"({self.n_entailing}E|{self.n_nonentailing}NE) seeds | "
         s += f"{self.entailer.oracle_calls} entailment checks | "
-        s += f"max score: {self.max_score}"
+        s += f"max score: {self.max_score:.5f} | "
+        s += f"current seed score: {self.seed_score:.5f}"
         logging.info(s)
 
     def _instance_to_region(self, x: list[float]) -> Region:
@@ -182,3 +201,13 @@ class ExplanationProgram:
                     self.max_score = score
                     self.max_region = r2
                 r.bounds[f_id] = b
+    
+    def _drop_features(self, r: Region):
+        to_remove = set()
+        for f_id, b in r.bounds.items():
+            d = self.fs_info.get_domain(f_id)
+            if isclose(b[0], d[0]) and isclose(b[1], d[-1]):
+                to_remove.add(f_id)
+        for f_id in to_remove:
+            del r.bounds[f_id]
+            

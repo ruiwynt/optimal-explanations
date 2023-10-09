@@ -42,6 +42,12 @@ class Region:
 
     def contained_in(self, r):
         """True iff this region is contained within r"""
+        if r.bounds == self.bounds:
+            return True
+        elif r.bounds == {}:
+            return True
+        elif self.bounds == {}:
+            return False
         for f_id in self.bounds.keys():
             if not f_id in r.bounds.keys():
                 continue
@@ -53,12 +59,38 @@ class Region:
     
     def contains(self, r):
         """True iff this region contains r"""
+        if r.bounds == self.bounds:
+            return True
+        elif self.bounds == {}:
+            return True
         for f_id in self.bounds.keys():
             if not f_id in r.bounds.keys():
                 return False
             b = self.bounds[f_id]
             rb = r.bounds[f_id]
             if b[0] > rb[0] or b[1] < rb[1]:
+                return False
+        return True
+    
+    def blocked_up_by(self, r):
+        if r.bounds == {}:
+            return True
+        for f_id, rb in r.bounds.items():
+            if not f_id in self.bounds.keys():
+                continue
+            b = self.bounds[f_id]
+            if not (b[0] <= rb[0] and b[1] >= rb[1]):
+                return False
+        return True
+
+    def blocked_down_by(self, r):
+        if r.bounds == {}:
+            return True
+        for f_id, rb in r.bounds.items():
+            if not f_id in self.bounds.keys():
+                continue
+            b = self.bounds[f_id]
+            if not (b[0] >= rb[0] and b[1] <= rb[1]):
                 return False
         return True
     

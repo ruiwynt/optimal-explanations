@@ -4,8 +4,10 @@ z3/
 # Benchmark data
 data/*
 
-# Stats
+# Helper scripts 
 analyse.py
+random_vols.py
+test_rc2_generator.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

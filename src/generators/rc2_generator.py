@@ -1,102 +1,170 @@
 import re
-from math import log
+import logging
+import numpy as np
+from math import log, isclose
 from itertools import combinations
+from decimal import Decimal
 
 from pysat.formula import WCNFPlus, IDPool
 from pysat.card import CardEnc
-from pysat.examples.rc2 import RC2Stratified
+from pysat.examples.rc2 import RC2Stratified, RC2
 
 from src.regions import Region
 from src.utils.sat_shortcuts import *
+from src.utils.erc2 import ERC2
 
 
 class SeedGenerator:
     """
     Generate unblocked seed with maximum volume.
     """
-    def __init__(self, domains, solver="cd15"):
-        self.domains = domains
+    def __init__(self, fs_info, solver="g4"):
+        self.fs_info = fs_info
         self.vpool = IDPool(start_from=1)
         self.wcnf = WCNFPlus()
+        self.solver = solver
+        # self.constraints = []
 
         self._make_encoding()
-        self.rc2 = RC2Stratified(self.wcnf, solver=solver)
+        self.rc2 = ERC2(
+            self.wcnf, 
+            solver=solver, 
+            adapt=True,
+            exhaust=True,
+            minz=True,
+            trim=True,
+            blo="div"
+        )
     
     def _make_encoding(self):
         l, u, I = self._get_index_functions()
 
+        def w(i, j, k, factor):
+            d = self.fs_info.get_domain(i)
+            i_size = Decimal(d[k])-Decimal(d[j])
+            return Decimal(log(factor*i_size))
+
         # Upper and lower boolean variables
-        for i in self.domains.keys():
-            d = self.domains[i]
+        for i in self.fs_info.keys():
+            d = self.fs_info.get_domain(i)
             for j in range(len(d)):
                 l(i,j)  # l_ij <-> d[j] is lower bound
                 u(i,j)  # u_ij <-> d[j] is upper bound
-            for j in range(len(d)):
-                if j == 0:
-                    self.wcnf.append([-u(i,j)])
-                elif j == len(d)-1:
-                    self.wcnf.append([-l(i,j)])
-                else:
-                    l_lt_u = If(
-                        l(i,j),
-                        Not(Or([u(i,k) for k in range(j+1)]))
-                    )  # l_ij -> ~(u_i0 v u_i1 v ... v u_ij)
-                    self.wcnf.extend(l_lt_u.to_cnf())
+            self.wcnf.append([-l(i,len(d)-1)])  # Lower bound can't be highest threshold
+            # self.constraints.append(f"~{l(i,len(d)-1)}")
+            self.wcnf.append([-u(i,0)])  # Upper bound can't be lowest threshold
+            # self.constraints.append(f"~{u(i,0)}")
+            for j in range(1, len(d)-1):
+                l_lt_u = Implies(
+                    l(i,j),
+                    Not(Or([u(i,k) for k in range(j+1)]))
+                )  # l_ij -> ~(u_i0 v u_i1 v ... v u_ij)
+                # self.constraints.append(l_lt_u)
+                self.wcnf.extend(l_lt_u.to_cnf())
 
-                    u_gt_t = If(
-                        u(i,j),
-                        Not(Or([l(i,k) for k in range(j, len(d))]))
-                    )  # u_ij -> ~(l_ij v l_i(j+1) v ... v l_im)
-                    self.wcnf.extend(u_gt_t.to_cnf())
+                u_gt_t = Implies(
+                    u(i,j),
+                    Not(Or([l(i,k) for k in range(j, len(d))]))
+                )  # u_ij -> ~(l_ij v l_i(j+1) v ... v l_im)
+                # self.constraints.append(u_gt_t)
+                self.wcnf.extend(u_gt_t.to_cnf())
         
         # Interval boolean variables
-        for i in self.domains.keys():
-            d = self.domains[i]
+        for i in self.fs_info.keys():
+            d = self.fs_info.get_domain(i)
+            diffs = []
             for (j, k) in combinations(range(len(d)), 2):
                 I(i,j,k)  # I_ijk <-> interval is (d[j], d[k])
                 constraint = Iff(And([l(i,j),u(i,k)]), I(i,j,k))
+                # self.constraints.append(constraint)
                 self.wcnf.extend(constraint.to_cnf())  # (l_ij ^ u_ik) <-> I_ijk
-                self.wcnf.append([I(i,j,k)], weight=log(d[k]-d[j])+1)
+                diffs.append(d[k]-d[j])
             I_vars = [I(i,j,k) for (j, k) in combinations(range(len(d)), 2)]
+            # self.constraints.append(f"sum({I_vars}) = 1")
             card = CardEnc.equals(I_vars, vpool=self.vpool).clauses
             self.wcnf.extend(card)  # Exactly one I_ijk 
 
-    def get_seed(self) -> Region:
-        model = self.rc2.compute()
-        if model is None:
-            return None
+            factor = 2
+            while 1/factor in diffs:
+                factor += 1
+            for (j, k) in combinations(range(len(d)), 2):
+                self.wcnf.append([I(i,j,k)], weight=w(i,j,k, factor))
 
-        is_used_interval = lambda x: self.vpool.obj(x) and "I" in self.vpool.obj(x)
-        intervals = [self.vpool.obj(x) for x in model if is_used_interval(x)]
-        bounds = {}
-        for I in intervals:
-            f_id = int(I[1])
-            l_idx = int(I[2])
-            u_idx = int(I[3])
-            d = self.domains[f_id]
-            bounds[f_id] = (d[l_idx], d[u_idx])
-        return Region(bounds)
+    def get_seed(self) -> Region:
+        with ERC2(
+            self.wcnf, 
+            solver=self.solver, 
+            adapt=True,
+            exhaust=True,
+            incr=True,
+            minz=True,
+            trim=True,
+            blo="full"
+        ) as solver:
+            model = solver.compute()
+            if model is None:
+                logging.info("UNSAT")
+                solver.get_core()
+                logging.info(f"UNSAT Core: {solver.core}")
+                return None
+
+            is_used_interval = lambda x: self.vpool.obj(x) and "I" in self.vpool.obj(x)
+            intervals = [self.vpool.obj(x) for x in model if is_used_interval(x)]
+            bounds = {}
+            for I in intervals:
+                I = I.split("_")
+                f_id = int(I[1])
+                l_idx = int(I[2])
+                u_idx = int(I[3])
+                d = self.fs_info.get_domain(f_id)
+                bounds[f_id] = (d[l_idx], d[u_idx])
+            return Region(bounds)
+        # model = self.rc2.compute()
+        # if model is None:
+        #     logging.info("UNSAT")
+        #     self.rc2.get_core()
+        #     logging.info(f"UNSAT Core: {self.rc2.core}")
+        #     return None
+        # is_used_interval = lambda x: self.vpool.obj(x) and "I" in self.vpool.obj(x)
+        # intervals = [self.vpool.obj(x) for x in model if is_used_interval(x)]
+        # bounds = {}
+        # for I in intervals:
+        #     I = I.split("_")
+        #     f_id = int(I[1])
+        #     l_idx = int(I[2])
+        #     u_idx = int(I[3])
+        #     d = self.fs_info.get_domain(f_id)
+        #     bounds[f_id] = (d[l_idx], d[u_idx])
+        # return Region(bounds)
 
     def must_contain(self, r: Region):
         l, u, I = self._get_index_functions()
         d_idx = self._region_to_didx(r)
+        to_conjunct = []
         for i in d_idx.keys():
-            d = self.domains[i]
+            d = self.fs_info.get_domain(i)
             l_idx = d_idx[i][0]
             u_idx = d_idx[i][1]
-            self._extend_rc2(Or([l(i,j) for j in range(l_idx+1)]).to_cnf())
-            self._extend_rc2(Or([u(i,k) for k in range(u_idx, len(d))]).to_cnf())
+            to_conjunct.append(Or([l(i,j) for j in range(l_idx+1)]))
+            to_conjunct.append(Or([u(i,k) for k in range(u_idx, len(d))]))
+        # self.constraints.append(And(to_conjunct))
+        self.wcnf.extend(And(to_conjunct).to_cnf()) 
+        self._extend_rc2(And(to_conjunct).to_cnf())
 
     def block_up(self, r: Region):
         l, u, I = self._get_index_functions()
         d_idx = self._region_to_didx(r)
         to_disjunct = []
         for i in d_idx.keys():
-            d = self.domains[i]
+            d = self.fs_info.get_domain(i)
             l_idx = d_idx[i][0]
+            if l_idx < len(d)-1:
+                to_disjunct.append(Or([l(i,j) for j in range(l_idx+1, len(d))]))
             u_idx = d_idx[i][1]
-            to_disjunct.append(Or([l(i,j) for j in range(l_idx+1, len(d))]))
-            to_disjunct.append(Or([u(i,k) for k in range(u_idx)]))
+            if u_idx > 0:
+                to_disjunct.append(Or([u(i,k) for k in range(u_idx)]))
+        # self.constraints.append(Or(to_disjunct))
+        self.wcnf.extend(Or(to_disjunct).to_cnf()) 
         self._extend_rc2(Or(to_disjunct).to_cnf())
 
     def block_down(self, r: Region):
@@ -104,12 +172,20 @@ class SeedGenerator:
         d_idx = self._region_to_didx(r)
         to_disjunct = []
         for i in d_idx.keys():
-            d = self.domains[i]
+            d = self.fs_info.get_domain(i)
             l_idx = d_idx[i][0]
+            if l_idx > 0:
+                to_disjunct.append(Or([l(i,j) for j in range(l_idx)]))
             u_idx = d_idx[i][1]
-            to_disjunct.append(Or([l(i,j) for j in range(l_idx)]))
-            to_disjunct.append(Or([u(i,k) for k in range(u_idx+1, len(d))]))
+            if u_idx < len(d)-1:
+                to_disjunct.append(Or([u(i,k) for k in range(u_idx+1, len(d))]))
+        # self.constraints.append(Or(to_disjunct))
+        self.wcnf.extend(Or(to_disjunct).to_cnf()) 
         self._extend_rc2(Or(to_disjunct).to_cnf())
+    
+    def _print_constraints(self):
+        for c in self.constraints:
+            self._print_enc(c)
     
     def _print_enc(self, s):
         s = str(s)
@@ -126,12 +202,12 @@ class SeedGenerator:
         l, u, I = self._get_index_functions()
         d_idx = {}
         for i, b in r.bounds.items(): 
-            d = self.domains[i]
+            d = self.fs_info.get_domain(i)
             d_idx[i] = (d.index(b[0]), d.index(b[1]))
         return d_idx
     
     def _get_index_functions(self):
-        l = lambda i, j: self.vpool.id(f"l{i}{j}")
-        u = lambda i, j: self.vpool.id(f"u{i}{j}")
-        I = lambda i, j, k: self.vpool.id(f"I{i}{j}{k}")
+        l = lambda i, j: self.vpool.id(f"l_{i}_{j}")
+        u = lambda i, j: self.vpool.id(f"u_{i}_{j}")
+        I = lambda i, j, k: self.vpool.id(f"I_{i}_{j}_{k}")
         return l, u, I
