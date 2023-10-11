@@ -7,6 +7,7 @@ import random
 
 from src.model import Model
 from src.explainer import ExplanationProgram
+from benchmark.benchmark import benchmark_all
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -14,53 +15,6 @@ logging.basicConfig(
     format="[%(levelname)s|%(asctime)s] %(message)s", 
     datefmt="%m/%d/%Y %I:%M:%S %p"
 )
-
-SEED = 21023
-
-def random_x(lims):
-    return [random.uniform(l[0], l[1]) for l in lims.values()]
-
-def benchmark_enumerate(name, seed=SEED):
-    random.seed(seed)
-    logging.info(f"Benchmarking model {name} enumeration...")
-    with open(f"models/{name}.json", "r") as fd:
-        model = json.load(fd)
-    model = Model(model)
-    
-    lims = get_lims(f"models/{name}.lims")
-    logging.info(f"successfully initialised domain limits models/{name}.json")
-
-    program = ExplanationProgram(model, limits=lims)
-    x = random_x(lims)
-    with open(f"data/{name}_enumerate.csv", "w") as f:
-        f.write("seed_gen_t,lattice_traversal_t,total_t,cum_solver_calls,cum_entailing,cum_nonentailing,max_score\n")
-        for r in program.enumerate_explanations(x, block_score=False):
-            f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.max_score}\n")
-            f.flush()
-    logging.info(f"Benchmark complete")
-
-def benchmark_explain(name, seed=SEED):
-    random.seed(seed)
-    logging.info(f"Benchmarking model {name} individual explanations...")
-    with open(f"models/{name}.json", "r") as fd:
-        model = json.load(fd)
-    model = Model(model)
-    
-    lims = get_lims(f"models/{name}.lims")
-    logging.info(f"successfully initialised domain limits models/{name}.lims")
-
-    program = ExplanationProgram(model, limits=lims)
-    N = 100
-    with open(f"data/{name}_explain.csv", "w") as f:
-        f.write("time_taken,solver_calls\n")
-        for i in range(N):
-            x = random_x(lims)
-            program.explain(x)
-            f.write(f"{program._explain_t},{program._sat_calls}\n")
-            program.reset()
-            if i % (N // 10) == 0:
-                logging.info(f"Benchmark {100*round(i/N, 2)}% ({i}/{N}) complete...")
-    logging.info(f"Benchmark complete")
 
 def get_lims(fname):
     lims = {}
@@ -71,32 +25,6 @@ def get_lims(fname):
             lims[int(line[0])] = (float(line[1]), float(line[2]))
             line = f.readline()
     return lims
-
-def benchmark_all():
-    import multiprocessing
-    names = ["iris", "wine", "breast_cancer", "olivetti_faces", "covtype"]
-    for name in names:
-        try:
-            benchmark_explain(name)
-        except:
-            continue
-    
-    for name in names:
-        try:
-            p = multiprocessing.Process(target=benchmark_enumerate, name="benum", args=(name,))
-            p.start()
-            T = 2700
-            s = 0
-            for i in range(T):
-                time.sleep(1)
-                s += 1
-                if s % (T // 10) == 0:
-                    logging.info(f"Benchmark {100*round(s/T, 2)}% ({s}/{T}) complete...")
-            p.terminate()
-            p.join()
-        except:
-            continue
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -120,10 +48,10 @@ def main():
                         action="store_true",
                         required=False,
                         help="Run benchmark for enumerating.")
-    action_group.add_argument("--benchmark-all",
+    action_group.add_argument("--benchmark-maxvol",
                         action="store_true",
                         required=False,
-                        help="Run benchmark for enumerating.")
+                        help="Run benchmark for finding maximum volume region.")
     parser.add_argument("--loglevel",
                         type=str,
                         required=False,
@@ -140,7 +68,7 @@ def main():
                         help="Seed generation method: (rand|min|max)")
     args = parser.parse_args()
 
-    if args.benchmark_all:
+    if args.benchmark_maxvol:
         benchmark_all()
         return
     if args.benchmark_explain:

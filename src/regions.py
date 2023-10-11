@@ -155,6 +155,11 @@ class FeatureSpaceInfo:
             i: [self.limits[i][0]] + self.thresholds[i] + [self.limits[i][1]]
             for i in thresholds.keys()
         }
+        for i, d in self.domains.items():
+            if d[0] == d[1]:
+                self.domains[i][0] -= 1
+            if d[-1] == d[-2]:
+                self.domains[i][-1] += 1
         
     def keys(self):
         return self.thresholds.keys()
@@ -163,7 +168,7 @@ class FeatureSpaceInfo:
         return self.domains[i]
     
     def get_dmin(self, i):
-        return self.limits[i][0]
+        return self.domains[i][-1]
 
     def get_dmax(self, i):
-        return self.limits[i][1]
+        return self.domains[i][0]

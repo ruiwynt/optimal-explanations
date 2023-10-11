@@ -38,6 +38,7 @@ class ExplanationProgram:
         self.max_score = -1
         self.max_region = None
         self.seed_score = -1
+        self.seed_entailing = False
 
         self._explain_t = -1
         self._sat_calls = -1
@@ -81,6 +82,7 @@ class ExplanationProgram:
             score = self.get_score(r)
             self.seed_score = score
             if not self.entailer.entails(r, c):
+                self.seed_entailing = False
                 # logging.info(f"Non entailing seed generated")
                 # logging.info(f"\n{r}")
                 t1 = time.perf_counter()
@@ -95,6 +97,7 @@ class ExplanationProgram:
                 if block_score:
                     self._check_entailing_adjacents(r, c)
             else:
+                self.seed_entailing = True
                 if not (self.seed_gen == "max" or self.seed_gen == "greedy"):
                     t1 = time.perf_counter()
                     self.traverser.grow(r, c)
@@ -116,6 +119,7 @@ class ExplanationProgram:
                     if self.n_entailing == 1:
                         self._log_stats()
                         logging.info(f"MAX SCORE: {self.max_score}\n{self.max_region}")
+                        self._sat_calls = self.entailer.oracle_calls
                         return None
             if (self.n_entailing + self.n_nonentailing) % 1 == 0:
                 self._log_stats()
