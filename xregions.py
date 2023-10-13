@@ -16,6 +16,8 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %I:%M:%S %p"
 )
 
+SEED = 21023
+
 def get_lims(fname):
     lims = {}
     with open(fname, "r") as f:
@@ -25,6 +27,9 @@ def get_lims(fname):
             lims[int(line[0])] = (float(line[1]), float(line[2]))
             line = f.readline()
     return lims
+
+def random_x(lims):
+    return [random.uniform(l[0], l[1]) for l in lims.values()]
 
 def main():
     parser = argparse.ArgumentParser(
@@ -105,10 +110,14 @@ def main():
     program = ExplanationProgram(model, limits=lims, seed_gen=seed_gen)
     logging.info(
         "\nPROGRAM INFO:\n" + \
-            f"\tClasses: {model.num_output_group}\n" + \
+            f"\tObjective: {model.objective}\n"
+            f"\tClasses: {2 if 'binary' in model.objective else model.num_output_group}\n" + \
             f"\tFeatures: {model.num_feature}\n" + \
             f"\tTrees: {model.num_trees}\n" + \
-            f"\tSeed Generation: {seed_gen}"
+            f"\tSeed Generation: {seed_gen}\n" + \
+            f"\tThresholds: {program.fs_info.n_thresholds()}\n" + \
+            f"\tPairs: {program.fs_info.n_pairs()}\n" + \
+            f"\tPossible Regions: {program.fs_info.n_regions()}"
     )
 
     c = program.entailer.predict(instance)

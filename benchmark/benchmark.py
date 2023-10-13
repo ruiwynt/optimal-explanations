@@ -15,6 +15,7 @@ logging.basicConfig(
     format="[%(levelname)s|%(asctime)s] %(message)s", 
     datefmt="%m/%d/%Y %I:%M:%S %p"
 )
+
 SEED = 21023
 
 def random_x(lims):
@@ -75,11 +76,11 @@ def benchmark_max(name, seed=SEED):
     program = ExplanationProgram(model, limits=lims, seed_gen="max")
     x = random_x(lims)
     with open(f"data/{name}_maxsat.csv", "w") as f:
-        f.write("seed_gen_t,lattice_traversal_t,total_t,cum_solver_calls,cum_entailing,cum_nonentailing,seed_score,max_score\n")
+        f.write("seed_gen_t,lattice_traversal_t,total_t,cum_solver_calls,cum_entailing,cum_nonentailing,seed_entailing,seed_score,max_score\n")
         for r in program.enumerate_explanations(x, block_score=False):
-            f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_score},{program.max_score}\n")
+            f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_entailing},{program.seed_score},{program.max_score}\n")
             f.flush()
-        f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_score},{program.max_score}\n")
+        f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_entailing},{program.seed_score},{program.max_score}\n")
         f.flush()
     logging.info(f"Benchmark complete")
 
@@ -96,11 +97,11 @@ def benchmark_greedy(name, seed=SEED):
     program = ExplanationProgram(model, limits=lims, seed_gen="greedy")
     x = random_x(lims)
     with open(f"data/{name}_greedy.csv", "w") as f:
-        f.write("seed_gen_t,lattice_traversal_t,total_t,cum_solver_calls,cum_entailing,cum_nonentailing,seed_score,max_score\n")
+        f.write("seed_gen_t,lattice_traversal_t,total_t,cum_solver_calls,cum_entailing,cum_nonentailing,seed_entailing,seed_score,max_score\n")
         for r in program.enumerate_explanations(x, block_score=False):
-            f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_score},{program.max_score}\n")
+            f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_entailing},{program.seed_score},{program.max_score}\n")
             f.flush()
-        f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_score},{program.max_score}\n")
+        f.write(f"{program._seed_gen_t},{program._traversal_t},{program._seed_gen_t+program._traversal_t},{program._sat_calls},{program.n_entailing},{program.n_nonentailing},{program.seed_entailing},{program.seed_score},{program.max_score}\n")
         f.flush()
     logging.info(f"Benchmark complete")
 
@@ -118,34 +119,35 @@ def get_lims(fname):
     return lims
 
 def benchmark_all():
-    models = get_models()
-    for model in models:
+    models = sorted(get_models())
+    for i, model in enumerate(models):
         with open(f"models/{model}.json", "r") as fd:
             model_obj = Model(json.load(fd))
-        p_max = Process(target=benchmark_max, name=f"benchmark_{model}_max", args=(model,))
+        p_max = Process(target=benchmark_max, name=f"benchmark_{model}_maxsat", args=(model,))
         p_greedy = Process(target=benchmark_greedy, name=f"benchmark_{model}_greedy", args=(model,))
         ps = [p_max, p_greedy]
-        [p.start() for p in ps]
-
-        timeout = 1200
-        timeout_t = time.strftime("%H:%M:%S", time.localtime(time.time() + timeout))
-        s = 0
-        logging.info(f"Benchmarking {model} - timeout in 1200s ({timeout_t})")
-        logging.info(
-            "\nPROGRAM INFO:\n" + \
-                f"\tClasses: {model_obj.num_output_group}\n" + \
-                f"\tFeatures: {model_obj.num_feature}\n" + \
-                f"\tTrees: {model_obj.num_trees}"
-        )
-        while s < timeout and any([p.is_alive() for p in ps]):
-            s += 1
-            time.sleep(1)
-        if any([p.is_alive() for p in ps]):
-            logging.info(f"Timeout - killing all processes...")
-            [p.kill() for p in ps]
-            [p.join() for p in ps]
-            logging.info(f"Killed children")
-        logging.info(f"Releasing resources...")
-        [p.close() for p in ps]
-        logging.info(f"Benchmarking for {model} complete.")
+        for p in ps:
+            p.start()
+            timeout = 600
+            timeout_t = time.strftime("%H:%M:%S", time.localtime(time.time() + timeout))
+            s = 0
+            logging.info(f"Benchmarking {model} {p.name} ({i+1}/{len(models)+1}) - timing out in {timeout} seconds ({timeout_t})")
+            logging.info(
+                "\nPROGRAM INFO:\n" + \
+                    f"\tObjective: {model_obj.objective}\n"
+                    f"\tClasses: {2 if 'binary' in model_obj.objective else model_obj.num_output_group}\n" + \
+                    f"\tFeatures: {model_obj.num_feature}\n" + \
+                    f"\tTrees: {model_obj.num_trees}"
+            )
+            while s < timeout and p.is_alive():
+                s += 1
+                time.sleep(1)
+            if p.is_alive():
+                logging.info(f"Timeout - killing process...")
+                p.kill()
+                p.join()
+                logging.info(f"Killed children")
+            logging.info(f"Releasing resources...")
+            p.close()
+            logging.info(f"Benchmarking for {model} {p.name} complete.")
 

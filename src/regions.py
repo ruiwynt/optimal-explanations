@@ -1,7 +1,8 @@
-from z3 import *
-
+import numpy as np
+from math import isclose, comb, prod
 from typing import Optional
-from math import isclose
+
+from z3 import *
 
 
 DECIMAL_PREC = 99
@@ -93,6 +94,21 @@ class Region:
             if not (b[0] >= rb[0] and b[1] <= rb[1]):
                 return False
         return True
+
+    def to_numpy(self, active_features=None):
+        if active_features is not None:
+            max_fid = max(active_features)
+        else:
+            max_fid = max(self.bounds.keys())
+        r_np = np.zeros((max_fid+1, 2), dtype=np.float64)
+        for f_id in range(max_fid+1):
+            if not f_id in self.bounds.keys():
+                r_np[f_id][0] = -1
+                r_np[f_id][1] = -1
+            else:
+                r_np[f_id][0] = self.bounds[f_id][0]
+                r_np[f_id][1] = self.bounds[f_id][1]
+        return r_np
     
     @classmethod
     def from_z3model(cls, model, variables):
@@ -139,6 +155,7 @@ class FeatureSpaceInfo:
                 } 
         """
         self.thresholds = thresholds
+        self.active_features = self.thresholds.keys()
 
         if limits:
             self.limits = limits
@@ -168,7 +185,16 @@ class FeatureSpaceInfo:
         return self.domains[i]
     
     def get_dmin(self, i):
-        return self.domains[i][-1]
+        return self.domains[i][0]
 
     def get_dmax(self, i):
-        return self.domains[i][0]
+        return self.domains[i][-1]
+
+    def n_thresholds(self):
+        return sum([len(d) for d in self.domains.values()])
+
+    def n_pairs(self):
+        return sum([comb(len(d),2) for d in self.domains.values()])
+
+    def n_regions(self):
+        return prod([comb(len(d),2) for d in self.domains.values()])

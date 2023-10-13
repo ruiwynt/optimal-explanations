@@ -12,11 +12,13 @@ from .regions import Region, FeatureSpaceInfo
 from .model import Model
 from .generators.z3_generator import SeedGenerator as Z3Generator
 from .generators.rc2_generator import SeedGenerator as Rc2Generator
+from .generators.rc2stratified_generator import SeedGenerator as StratifiedRc2Generator
 from .generators.greedy_generator import SeedGenerator as GreedyGenerator
 from .traverser import LatticeTraverser
 
 
 class ExplanationProgram:
+    _trivially_optimal = ["max", "maxstrat", "greedy"]
     def __init__(self, model: Model, limits=None, seed_gen="rand"):
         self.fs_info = FeatureSpaceInfo(model.thresholds, limits=limits)
         self.entailer = EntailmentChecker(model)
@@ -24,8 +26,9 @@ class ExplanationProgram:
         if seed_gen == "rand" or seed_gen == "min":
             self.generator = Z3Generator(self.fs_info, method=seed_gen)
         elif seed_gen == "max":
-            # TODO: Rc2Generator doesn't generate largest region as first seed
             self.generator = Rc2Generator(self.fs_info)
+        elif seed_gen == "maxstrat":
+            self.generator = StratifiedRc2Generator(self.fs_info)
         elif seed_gen == "greedy":
             self.generator = GreedyGenerator(self.fs_info)
         else:
@@ -73,10 +76,10 @@ class ExplanationProgram:
         c = self.entailer.predict(x)
         self.generator.must_contain(self.init_region)
         self.traverser.must_contain(self.init_region)
-        t1 = time.perf_counter()
+        t1 = time.perf_counter_ns()
         r = self.generator.get_seed()
-        t2 = time.perf_counter()
-        self._seed_gen_t = t2 - t1
+        t2 = time.perf_counter_ns()
+        self._seed_gen_t = (t2 - t1)/10**9
         while r:
             # logging.info(f"{self.get_score(r)} | {self.lg_score(r)}")
             score = self.get_score(r)
@@ -85,24 +88,24 @@ class ExplanationProgram:
                 self.seed_entailing = False
                 # logging.info(f"Non entailing seed generated")
                 # logging.info(f"\n{r}")
-                t1 = time.perf_counter()
+                t1 = time.perf_counter_ns()
                 r = self._instance_to_region(self.entailer.cexample)
                 self.traverser.eliminate_vars(r)
                 # logging.info(f"Eliminated features\n{r}")
                 # logging.info(f"\n{r}")
-                t2 = time.perf_counter()
-                self._traversal_t = t2 - t1
+                t2 = time.perf_counter_ns()
+                self._traversal_t = (t2 - t1)/10**9
                 self.generator.block_up(r)
                 self.n_nonentailing += 1
                 if block_score:
                     self._check_entailing_adjacents(r, c)
             else:
                 self.seed_entailing = True
-                if not (self.seed_gen == "max" or self.seed_gen == "greedy"):
-                    t1 = time.perf_counter()
+                if not self.seed_gen in self._trivially_optimal:
+                    t1 = time.perf_counter_ns()
                     self.traverser.grow(r, c)
-                    t2 = time.perf_counter()
-                    self._traversal_t = t2 - t1
+                    t2 = time.perf_counter_ns()
+                    self._traversal_t = (t2 - t1)/10**9
                 self._drop_features(r)
                 self.generator.block_down(r)
                 score = self.get_score(r)
@@ -113,7 +116,7 @@ class ExplanationProgram:
                     self.max_region = r
                 self.seed_score = score
                 self.n_entailing += 1
-                if self.seed_gen == "max" or self.seed_gen == "greedy":
+                if self.seed_gen in self._trivially_optimal:
                     logging.info(f"Entailing Seed #{self.n_entailing} | {score:.5f} ")
                     # logging.info(f"\n{r}")
                     if self.n_entailing == 1:
@@ -125,10 +128,10 @@ class ExplanationProgram:
                 self._log_stats()
             self._sat_calls = self.entailer.oracle_calls
             yield r
-            t1 = time.perf_counter()
+            t1 = time.perf_counter_ns()
             r = self.generator.get_seed()
-            t2 = time.perf_counter()
-            self._seed_gen_t = t2 - t1
+            t2 = time.perf_counter_ns()
+            self._seed_gen_t = (t2 - t1)/10**9
         self._log_stats()
         logging.info(f"MAX SCORE: {self.max_score}\n{self.max_region}")
 

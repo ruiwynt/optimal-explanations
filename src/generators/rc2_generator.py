@@ -7,11 +7,10 @@ from decimal import Decimal
 
 from pysat.formula import WCNFPlus, IDPool
 from pysat.card import CardEnc
-from pysat.examples.rc2 import RC2Stratified, RC2
+from pysat.examples.rc2 import RC2
 
 from src.regions import Region
 from src.utils.sat_shortcuts import *
-from src.utils.erc2 import ERC2
 
 
 class SeedGenerator:
@@ -23,28 +22,26 @@ class SeedGenerator:
         self.vpool = IDPool(start_from=1)
         self.wcnf = WCNFPlus()
         self.solver = solver
+        self.interval_sizes = {}
         # self.constraints = []
 
-        self._make_encoding()
-        self.rc2 = ERC2(
+        self._init_hard_bounds()
+        self._init_hard_intervals()
+        self._init_soft()
+        self.rc2 = RC2(
             self.wcnf, 
             solver=solver, 
             adapt=True,
             exhaust=True,
             minz=True,
             trim=True,
-            blo="div"
         )
+
+        self.n_vars = len(self.vpool.obj2id.keys())
+        self.n_clauses = len(self.wcnf.hard) + len(self.wcnf.soft)
     
-    def _make_encoding(self):
+    def _init_hard_bounds(self):
         l, u, I = self._get_index_functions()
-
-        def w(i, j, k, factor):
-            d = self.fs_info.get_domain(i)
-            i_size = Decimal(d[k])-Decimal(d[j])
-            return Decimal(log(factor*i_size))
-
-        # Upper and lower boolean variables
         for i in self.fs_info.keys():
             d = self.fs_info.get_domain(i)
             for j in range(len(d)):
@@ -69,29 +66,41 @@ class SeedGenerator:
                 # self.constraints.append(u_gt_t)
                 self.wcnf.extend(u_gt_t.to_cnf())
         
-        # Interval boolean variables
+    def _init_hard_intervals(self):
+        l, u, I = self._get_index_functions()
         for i in self.fs_info.keys():
             d = self.fs_info.get_domain(i)
-            diffs = []
+            sizes = []
             for (j, k) in combinations(range(len(d)), 2):
                 I(i,j,k)  # I_ijk <-> interval is (d[j], d[k])
                 constraint = Iff(And([l(i,j),u(i,k)]), I(i,j,k))
                 # self.constraints.append(constraint)
                 self.wcnf.extend(constraint.to_cnf())  # (l_ij ^ u_ik) <-> I_ijk
-                diffs.append(d[k]-d[j])
+                sizes.append(d[k]-d[j])
             I_vars = [I(i,j,k) for (j, k) in combinations(range(len(d)), 2)]
             # self.constraints.append(f"sum({I_vars}) = 1")
             card = CardEnc.equals(I_vars, vpool=self.vpool).clauses
             self.wcnf.extend(card)  # Exactly one I_ijk 
+            self.interval_sizes[i] = sorted(sizes, reverse=True)
 
-            factor = 2
-            while 1/factor in diffs:
-                factor += 1
+    def _init_soft(self):
+        l, u, I = self._get_index_functions()
+        def w(i, j, k, factor):
+            d = self.fs_info.get_domain(i)
+            i_size = Decimal(d[k])-Decimal(d[j])
+            return Decimal(log(i_size)) + Decimal(log(factor))
+
+        factor = 1
+        all_intervals = [interval for f_intervals in self.interval_sizes.values() for interval in f_intervals]
+        while 1/factor in all_intervals:
+            factor += 1
+        for i in self.fs_info.keys():
+            d = self.fs_info.get_domain(i)
             for (j, k) in combinations(range(len(d)), 2):
                 self.wcnf.append([I(i,j,k)], weight=w(i,j,k, factor))
 
     def get_seed(self) -> Region:
-        with ERC2(
+        with RC2(
             self.wcnf, 
             solver=self.solver, 
             adapt=True,
@@ -99,7 +108,6 @@ class SeedGenerator:
             incr=True,
             minz=True,
             trim=True,
-            blo="full"
         ) as solver:
             model = solver.compute()
             if model is None:
