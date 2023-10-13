@@ -20,8 +20,11 @@ class SeedGenerator(RC2Generator):
     Generate unblocked seed with maximum volume.
     """
     def __init__(self, fs_info, solver="g4"):
-        self.stratified_softs = {}
-        self.next_level = 0
+        self.soft_pq = []
+        self.active_softs = {}
+        self.card_encs = None
+        self.level_size = int(fs_info.n_pairs()/len(fs_info.keys()))
+        self.current_level = 0
         super().__init__(fs_info, solver=solver)
 
     def _init_soft(self):
@@ -40,24 +43,32 @@ class SeedGenerator(RC2Generator):
         for i in self.fs_info.keys():
             d = self.fs_info.get_domain(i)
             for (j, k) in combinations(range(len(d)), 2):
-                level = len(d) - (k - j) - 1
-                if not level in self.stratified_softs.keys():
-                    self.stratified_softs[level] = {"softs": [], "ivars": {f_id: [] for f_id in self.fs_info.keys()}, "card": []}
-                self.stratified_softs[level]["softs"].append(([I(i,j,k)], w(i,j,k,factor)))
-                self.stratified_softs[level]["ivars"][i].append(I(i,j,k))
-        for level in self.stratified_softs.keys():
-            for i in self.fs_info.keys():
-                ivars = self.stratified_softs[level]["ivars"][i]
-                if len(ivars) > 0:
-                    self.stratified_softs[level]["card"] += CardEnc.equals(ivars, vpool=self.vpool).clauses
-        self._start_next_level()
+                self.soft_pq.append((-w(i,j,k, factor), i, j, k, I(i,j,k)))
+        heapq.heapify(self.soft_pq)
+        self._activate_intervals()
 
-    def _start_next_level(self, solver=None):
-        if not self.next_level in self.stratified_softs.keys():
+    def _activate_intervals(self):
+        if len(self.soft_pq) == 0:
             return False
-        for c, w in self.stratified_softs[self.next_level]["softs"]:
-            self.wcnf.append(c, weight=w)
-        self.next_level += 1
+        i = 0
+        n_pops = min(self.level_size, len(self.soft_pq))
+        while i < n_pops:
+            interval = heapq.heappop(self.soft_pq)
+            w, f_id, var = -interval[0], interval[1], interval[4]
+            self.wcnf.append([var], weight=w)
+
+            if not f_id in self.active_softs.keys():
+                self.active_softs[f_id] = []
+            self.active_softs[f_id].append(var)
+            i += 1
+        self.card_encs = []
+        for f_id in self.active_softs.keys():
+            ivars = self.active_softs[f_id] 
+            self.card_encs += CardEnc.equals(ivars, vpool=self.vpool).clauses
+        self.current_level += 1
+        n_added = self.current_level*self.level_size
+        N = self.fs_info.n_pairs()
+        logging.info(f"Activated new clauses. Progress: {n_added}/{N} ({100*n_added/N:.2f}%)")
         return True
 
     def get_seed(self) -> Region:
@@ -70,15 +81,15 @@ class SeedGenerator(RC2Generator):
             minz=True,
             trim=True,
         ) as solver:
-            for c in self.stratified_softs[self.next_level-1]["card"]:
+            for c in self.card_encs:
                 solver.add_clause(c)
             model = solver.compute()
             while model is None:
                 solver.delete()
-                if not self._start_next_level():
+                if not self._activate_intervals():
                     return None
                 solver.init(self.wcnf, incr=True)
-                for c in self.stratified_softs[self.next_level-1]["card"]:
+                for c in self.card_encs:
                     solver.add_clause(c)
                 model = solver.compute()
             is_used_interval = lambda x: self.vpool.obj(x) and "I" in self.vpool.obj(x)
