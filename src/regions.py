@@ -198,3 +198,13 @@ class FeatureSpaceInfo:
 
     def n_regions(self):
         return prod([comb(len(d),2) for d in self.domains.values()])
+
+    def n_regions_contains(self, r):
+        n = 1
+        for i in self.thresholds.keys():
+            if not i in r.bounds.keys():
+                continue
+            d = self.domains[i]
+            f_interval = r.bounds[i]
+            n *= (d.index(f_interval[0])+1) * (len(d)-d.index(f_interval[1])+1)
+        return n 

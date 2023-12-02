@@ -1,8 +1,4 @@
-import logging
-from math import isclose
-from copy import deepcopy
-
-from .entailment import EntailmentChecker
+from .entailment.z3_entailer import EntailmentChecker
 from .regions import Region
 
 

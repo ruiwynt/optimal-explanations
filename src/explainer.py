@@ -1,38 +1,46 @@
 import time
 import bisect
 import logging
-from math import prod, isclose, log
 from copy import deepcopy
+from itertools import product
+from math import prod, isclose, log
 from decimal import Decimal, getcontext
 
-from z3 import *
+import numpy as np
+from xgboost import XGBClassifier
 
-from .entailment import EntailmentChecker
+from .entailment.z3_entailer import EntailmentChecker as Z3EntailmentChecker
 from .regions import Region, FeatureSpaceInfo
 from .model import Model
 from .generators.z3_generator import SeedGenerator as Z3Generator
 from .generators.rc2_generator import SeedGenerator as Rc2Generator
 from .generators.rc2stratified_generator import SeedGenerator as StratifiedRc2Generator
-from .generators.greedy_generator import SeedGenerator as GreedyGenerator
+from .generators.ucs_generator import SeedGenerator as UcsGenerator
+from .generators.incremental_generator import SeedGenerator as IncrementalGenerator
 from .traverser import LatticeTraverser
 
 
 class ExplanationProgram:
-    _trivially_optimal = ["max", "maxstrat", "greedy"]
-    def __init__(self, model: Model, limits=None, seed_gen="rand"):
+    _trivially_optimal = ["maxsat", "maxstrat", "incrmaxsat", "ucs"]
+    _uses_oracle = ["maxsat"]
+
+    def __init__(self, model: Model, limits=None, seed_gen="rand", mpath=None):
         self.fs_info = FeatureSpaceInfo(model.thresholds, limits=limits)
-        self.entailer = EntailmentChecker(model)
+        self.entailer = Z3EntailmentChecker(model)
         self.seed_gen = seed_gen
+        self.mpath = mpath
         if seed_gen == "rand" or seed_gen == "min":
             self.generator = Z3Generator(self.fs_info, method=seed_gen)
-        elif seed_gen == "max":
+        elif seed_gen == "maxsat":
             self.generator = Rc2Generator(self.fs_info)
         elif seed_gen == "maxstrat":
             self.generator = StratifiedRc2Generator(self.fs_info)
-        elif seed_gen == "greedy":
-            self.generator = GreedyGenerator(self.fs_info)
+        elif seed_gen == "ucs":
+            self.generator = UcsGenerator(self.fs_info)
+        elif seed_gen == "incrmaxsat":
+            self.generator = IncrementalGenerator(self.fs_info)
         else:
-            raise ArgumentError(f"{seed_gen} not a valid seed generation method")
+            raise ValueError(f"{seed_gen} not a valid seed generation method")
         self.traverser = LatticeTraverser(self.entailer, self.fs_info.domains)
 
         self.total_blocked = 0
@@ -57,6 +65,39 @@ class ExplanationProgram:
             ]) + "\n"
         s += f"Solver: {self.solver}\n"
         return s
+
+    def _preseed_generator(self, entailing_c, n_preseeds=1000):
+        logging.info("Preseeding regions...")
+        if self.mpath:
+            predictor = XGBClassifier()
+            predictor.load_model(self.mpath)
+        domains = self.fs_info.domains
+        n_elementary = prod([len(domains[i]) for i in domains.keys()])
+        n_lens = [[-1] for _ in range(max(domains.keys())+1)]
+        n_seeded = 0
+        for f_id in domains.keys():
+            n_lens[f_id] = range(len(domains[f_id])-1)
+        for (i, r_idx) in enumerate(product(*n_lens)):
+            if i >= n_preseeds:
+                break
+            instance = [-1 for _ in range(max(domains.keys())+1)]
+            bounds = {}
+            for f_id in domains.keys():
+                d = domains[f_id]
+                li = r_idx[f_id]
+                bounds[f_id] = (d[li], d[li+1])
+                instance[f_id] = d[li]
+            if self.mpath:
+                c = predictor.predict([instance])
+            else:
+                c = self.entailer.predict(instance)
+            if not c == entailing_c:
+                r = Region(bounds)
+                self.generator.block_up(r)
+            n_seeded += 1
+            if n_seeded % 1000 == 0:
+                logging.info(f"Preseeding {100*n_seeded/n_elementary:.2f}% ({n_seeded}/{n_elementary}) complete")
+        logging.info("Preseeding complete")
     
     def explain(self, x: list[float]):
         """Find a maximal explanation which contain the instance x."""
@@ -71,11 +112,11 @@ class ExplanationProgram:
         return self.init_region
     
     def enumerate_explanations(self, x: list[float], block_score=False):
-        """Enumerate all maximal explanations for the given class."""
         self.init_region = self._instance_to_region(x)
         c = self.entailer.predict(x)
         self.generator.must_contain(self.init_region)
         self.traverser.must_contain(self.init_region)
+        # self._preseed_generator(c)
         t1 = time.perf_counter_ns()
         r = self.generator.get_seed()
         t2 = time.perf_counter_ns()
@@ -156,7 +197,7 @@ class ExplanationProgram:
         s += f"{self.n_entailing + self.n_nonentailing } "
         s += f"({self.n_entailing}E|{self.n_nonentailing}NE) seeds | "
         s += f"{self.entailer.oracle_calls} entailment checks | "
-        s += f"max score: {self.max_score:.5f} | "
+        # s += f"max score: {self.max_score:.5f} | "
         s += f"current seed score: {self.seed_score:.5f}"
         logging.info(s)
 

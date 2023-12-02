@@ -9,6 +9,9 @@ datasets/*
 analyse.py
 random_vols.py
 test_rc2_generator.py
+counter_test.py
+hitman_test.py
+save_metadata.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,80 +1,37 @@
-# Optimal Minimal Explanations for Boosted Trees
+# xregion - Optimally Informative and Robust Explanations for Boosted Trees
 
 ## 1. Introduction
 
-Given a boosted tree and data instance, computes the optimal explanative region.
+xregion is a tool which computes an optimal explanation for a prediction for a Boosted Tree. More specifically, given an input instance x with predicted class c, output an explanation in the form of a set of intervals on each input feature such that any other instance y which has feature values within the intervals of the explanation is always classified as c. This is the implementation of the procedures outlined in the Honours thesis. 
 
-Supports XGBoost trees trained with the `binary::logistic` and `multi::softprob` objectives.
+Currently, xregions supports XGBoost trees trained with the `binary::logistic` and `multi::softprob` objectives. Categorical features are not supported.
 
-## 2. Background
+## 2. Usage
 
-### Universe of Classifiers 
+First, install all requirements. A working installation of the Z3 theorem prover is required.
 
-A classification problem asks the question of how to label a given example of input data. Generally, a classifier has:
+Save the desired XGBoost Tree as a .json file using the `save_model` method of the classifier and put it into the `./models` folder. To define the minimum and maximum values of each feature's domain, create a .lims file with the same name as the model.json file and put it into the models folder. Each line of the .lims file should have the format `<feature_id>, <domain_min>, <domain_max>`. The `feature_id` field should start from zero and be sequential with no numbers missing.
 
-- A set of features $\mathcal{F} = \{1, 2, ..., m\}$. Each feature $j$ belongs to some domain $D_j$
-- A set of classes $\mathcal{K} = \{c_1, c_2, ..., c_K\}$
-- A feature space $\mathbb{F} = D_1 \times D_2 \times ... \times D_m$. A point in the feature space is an instance $\tilde{x} = (x_1, x_2, ..., x_m)$, with $x_j \in D_j$
-- A classifier function $\tau: \mathbb{F} \rightarrow \mathcal{K}$, mapping each instance in the feature space to a class.
+To compute an optimal explanation for an instance, use the command:
 
-A tree ensemble is a set of decision trees which work together to compute an output label for a given instance. Each decision tree has an associated class, and there are $n$ decision trees for each class.Instances encode a path from the root to a leaf node. Decision trees have a set of non-terminal nodes which have a split condition on some feature, and leaf nodes have an associated weight such that when a path terminates at that leaf, its weight is added to the total weight of the class associated with that tree. The class with the highest total weight after computation over all trees is the output class.
+```
+python xregions.py -m <model_name> -e ([v1, v2, ..., vm]|random) --seed-gen <seed_generation_method>
+```
 
-More formally, let $\mathcal{E} = \{T_{Kj+i} : j \in [n], i \in [K]\}$ be an ensemble of decision trees, where $i$ is the class associated with tree $T_{Kj + i}$. Each decision tree is a set of non-terminal nodes $S$, terminal nodes $P$, and a function $T_{K_j + i}: \mathbb{F} \rightarrow \mathbb{R}$ which outputs the weight assigned by the tree for a given instance. Each non-terminal node has a split condition, which has an associated feature $j$, split value $s_{j,i}$, and relation operator in $(\leq, <, \geq, >)$. Let all split values across all trees for a particular feature be denoted $S_j = \{s_{j, 1}, s_{j, 2}, ..., s_{j, m_j}\}$. Note that the total class weight of an instance changes if and only if a feature value changes its ordering with respect to that feature's split values.
+where v1, v2, ... etc are the feature values of the input instance. To compute the optimal explanation for an arbitrary instance, use "random" instead of inputting an array.
 
-An **region** is a set of pairs $R = \{(l_j, u_j): j \in \mathcal{F}, l_j < u_j\}$. Each pair defines an interval for a particular feature. All of these pairs together define a subset of $\mathbb{F}$ where certain properties can be tested. For this universe, lets define the set of all regions $\mathcal{R}$ as all regions such that $l_j, u_j \in S_j$. 
+The seed region generation method specifies which algorithm is used to generate regions in each iteration. This can take the values "ucs", "maxsat", or "incrmaxsat". The details of these approaches are provided in the thesis.
 
-Given a classifier $\tau(\tilde{x})$ and instance $\tilde{x}$ with output class $c$, a region $R$ is **explanative** if:
+The following command performs the experiment performed in the thesis. All models in the `./models` folder are benchmarked in a multiprocessed manner.
 
-1. $l_j \leq x_j < u_j$ for all $j \in \mathcal{F}$
-2. For any instance $\tilde{v}$ where $l_j \leq v_j \leq u_j$, $\tau(\tilde{v}) = c$. 
+```
+python xregions.py -m <any> --benchmark-all
+```
 
-### Universe of SMT
+Note that the `-m` flag has no effect on the result. All models are benchmarked.
 
-This is the encoding of the classifier universe into SMT such that the optimal maximally explanative region (MaxER) with respect to some objective function $Z: \mathcal{R} \rightarrow \mathbb{R}$ can be found. The MARCO approach described in Liffiton et al. (2016) is implemented for subsets of regions and their threshold values.
 
-We now describe how to encode any region into propositional logic. Recall that $S_j$ denotes the set of all split values for feature $j$. Let us sort $S_j$ such that $s_{j, a} < s_{j, b}$ if $a < b$. Then each pair of adjacent threshold values induces an **elementary interval** $I_{j, i} = [s_{j, i}, s_{j, i+1})$.
-
-Let each elementary interval be denoted by a boolean variable $l_{j,i}$. Given a region $R$, let $l_{j,i}$ if and only if $l_j \leq s_{j, i}$ and $l_u \geq s_{j, i+1}$. Then each region $R$ can also be defined by a set of boolean variables $L$ such that $l_{j ,i} \in L$ if and only if $l_{j, i}$ is true.
-
-Note that a region $A$ is contained within a region $B$ if and only if $L_A \subseteq L_B$.
-
-Bottom of marco lattice is the empty set. Top of marco lattice is the set of all $l_{j,i}$.
-
-### MaxSAT Entailment Checker
-
-This section describes Algorithm 1 in Ignatiev et al. (2022). Given:
-
-- An encoding of a boosted tree into hard clauses $\mathcal{H}$ and soft clauses $\mathcal{S}$.
-- An input instance $\tilde{x}$, with its associated prediction $c_i$, in terms of boolean order variables as defined in Ignatiev et al. (2022).
-- A candidate explanation $\chi$ in terms of the same boolean order variables, a subset of $\tilde{x}$.
-
-The algorithm will output whether or not the candidate explanation entails the prediction $c_i$.
-
-## 3. Procedure Outline
-
-**OUTDATED, NEED TO UPDATE**
-
-1. Take boolean variables which represent threshold values and correctly pair them up to create a *range variable*. For example, if $o_{ij} = 1$ iff $x_i < d_{ij}$ where $d_{ij}$ is the $j$-th largest threshold value for feature $i$, we can construct range variables $r_{ijk} = \lnot o_{ij} \land o_{ik}$ where $j < k$. We can retrieve the threshold values from the BT.
-
-2. For each range variable $r_{ijk}$, calculate its weight $w_{ijk}$ as a monotone function of the interval size. For example, we can have that $w_{ijk} = \log(d_{ik} - d_{ij})$.
-
-3. Take any instance of the feature space $\mathbf{x} = (x_1, x_2, ..., x_m)$. Discard all range variables which aren't consistent with the instance's feature values. For all range variables which are left, we can define the objective function to maximise as:
-
-$$\sum_{\text{r not discarded}} w_{ijk}r_{ijk}$$
-
-4. Construct the constraints for MARCO (Liffiton et al., 2016), which we use as a Partial Weighted MaxSAT solver. To do this, we feed the following constraints into the solver:
-    -  The constraints on $o_ij$ from Ignatiev et al. (2022).
-    -  A constraint mandating that only one $r_{ijk}$ is true for each feature $i$.
-  
-5. Run MARCO with the parameters defined in (3) and (4). It will return an optimal subset of range variables. This subset represents an assignment to variables $r_{ijk}$ which maximises the objective funciton subject to constraints.
-
-6. Use the Entailment Check from Ignatiev et al. (2022) to check whether or not the optimal subset is a valid explanation for the given BT model. If it is a valid explanation, then we return the optimal explanation and we are done.
-
-7. If the optimal subset is not a valid explanation, we construct a contrastive explanation (Ignatiev et al., 2020) from the optimal subset and feed it back into MARCO. This will block any subsets of the optimal subset from being explored by MARCO, reducing the search space.
-
-8. Repeat steps 5 - 7 until an optimal valid subset is found.
-
-## 4. References
+## 3. References
 
 Liffiton, M.H., Previti, A., Malik, A. et al. Fast, flexible MUS enumeration. Constraints 21, 223–250 (2016). https://doi.org/10.1007/s10601-015-9183-0
 
@@ -82,19 +39,3 @@ Ignatiev, A., Izza, Y., Stuckey, P. J., & Marques-Silva, J. (2022). Using MaxSAT
 
 Ignatiev, A., Narodytska, N., Asher, N., & Marques-Silva, J. (2020). On Relating 'Why?' and 'Why Not?' Explanations. ArXiv, abs/2012.11067.
 
-## 5. Interesting things I came across
-
-https://arxiv.org/pdf/2303.09271v1.pdf uses MARCO to calculate minimal explanations and minimum explanations. Claims to acheve a 2400x speedup compared to current SoTA methods.
-
-## 6. TODO
-
-- Restructure code to account for classifiers which don't use a specific feature.
-- Implement PySAT encoder after making region_finder modular.
-- Command line utility for using example models.
-- Benchmark performance.
-- Improve logging, dump log to file.
-
-- Save and load cache.
-- Smart search of volume space, binary search the range of possible volumes from up.
-- Try not blocking the score and seeing if there's any performance difference.
-- Try MiniZinc; transcendental function support?

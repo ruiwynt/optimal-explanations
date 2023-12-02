@@ -45,18 +45,10 @@ def main():
     action_group.add_argument("-e", "--explain",
                         type=str,
                         help="Generate one explanation for a given instance.")
-    action_group.add_argument("--benchmark-explain",
+    action_group.add_argument("--benchmark-all",
                         action="store_true",
                         required=False,
-                        help="Run benchmark for explaining.")
-    action_group.add_argument("--benchmark-enumerate",
-                        action="store_true",
-                        required=False,
-                        help="Run benchmark for enumerating.")
-    action_group.add_argument("--benchmark-maxvol",
-                        action="store_true",
-                        required=False,
-                        help="Run benchmark for finding maximum volume region.")
+                        help="Run benchmarks for given seed generation method.")
     parser.add_argument("--loglevel",
                         type=str,
                         required=False,
@@ -73,8 +65,8 @@ def main():
                         help="Seed generation method: (rand|min|max)")
     args = parser.parse_args()
 
-    if args.benchmark_maxvol:
-        benchmark_all()
+    if args.benchmark_all:
+        benchmark_all(args.seed_gen)
         return
     if args.benchmark_explain:
         benchmark_explain(args.model)
@@ -107,7 +99,7 @@ def main():
     else:
         instance = [float(x) for x in instance.split(",")]
 
-    program = ExplanationProgram(model, limits=lims, seed_gen=seed_gen)
+    program = ExplanationProgram(model, limits=lims, seed_gen=seed_gen, mpath=f"models/{args.model}.json")
     logging.info(
         "\nPROGRAM INFO:\n" + \
             f"\tObjective: {model.objective}\n"

@@ -1,7 +1,10 @@
-from z3 import *
+from pysat.formula import WCNFPlus, IDPool
+from pysat.card import CardEnc
+from pysat.examples.rc2 import RC2
 
-from .model import Model
-from .regions import Region
+from src.model import Model
+from src.regions import Region
+from src.utils.sat_shortcuts import *
 
 
 class EntailmentChecker:
@@ -11,14 +14,14 @@ class EntailmentChecker:
         self.model = model
         self.grp_vars = {grp_id : [] for grp_id in set(self.model.tree_info)}
         self.used_features = model.thresholds.keys()
-        self.feature_vars = {
-            i: Real('x%d' % i) 
-            for i in range(self.model.num_feature)
-        }
+
+        self.vpool = IDPool(start_from=1)
+        self.wcnf = WCNFPlus()
         self.constraints = []
         self.cexample = None
         self.oracle_calls = 0
 
+        self._encode_domains()
         self._encode_model()
 
     def __str__(self):
@@ -60,6 +63,12 @@ class EntailmentChecker:
     def reset(self):
         self.cexample = None
         self.oracle_calls = 0
+
+    def _get_index_functions(self):
+        pass
+
+    def _encode_domains(self):
+        
     
     def _get_weights(self, x: list[float]):
         x_enc = And([

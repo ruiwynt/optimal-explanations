@@ -1,12 +1,10 @@
 import re
 import logging
 import numpy as np
-import heapq
 from math import log, isclose
 from itertools import combinations
 from decimal import Decimal
 
-from pysat.formula import WCNFPlus, IDPool
 from pysat.card import CardEnc
 from pysat.examples.rc2 import RC2
 
@@ -20,11 +18,9 @@ class SeedGenerator(RC2Generator):
     Generate unblocked seed with maximum volume.
     """
     def __init__(self, fs_info, solver="g4"):
-        self.soft_pq = []
         self.active_softs = {}
-        self.card_encs = None
-        self.level_size = int(fs_info.n_pairs()/len(fs_info.keys()))
-        self.current_level = 0
+        self.card_encs = {}
+        self.factor = 1
         super().__init__(fs_info, solver=solver)
 
     def _init_soft(self):
@@ -36,40 +32,50 @@ class SeedGenerator(RC2Generator):
             d_size = Decimal(d[-1])-Decimal(d[0])
             return Decimal(log(i_size)) + Decimal(log(factor)) - Decimal(log(d_size))
 
-        factor = 1
         all_intervals = [interval for f_intervals in self.interval_sizes.values() for interval in f_intervals]
-        while 1/factor in all_intervals:
-            factor += 1
+        while 1/self.factor in all_intervals:
+            self.factor += 1
+
         for i in self.fs_info.keys():
             d = self.fs_info.get_domain(i)
+            self.active_softs[i] = set()
             for (j, k) in combinations(range(len(d)), 2):
-                self.soft_pq.append((-w(i,j,k, factor), i, j, k, I(i,j,k)))
-        heapq.heapify(self.soft_pq)
-        self._activate_intervals()
+                if j == 0 and k == len(d)-1:
+                    self._add_soft(i,j,k)
+                    self.card_encs[i] = [[I(i,j,k)]]
 
-    def _activate_intervals(self):
-        if len(self.soft_pq) == 0:
-            return False
-        i = 0
-        n_pops = min(self.level_size, len(self.soft_pq))
-        while i < n_pops:
-            interval = heapq.heappop(self.soft_pq)
-            w, f_id, var = -interval[0], interval[1], interval[4]
-            self.wcnf.append([var], weight=w)
+    def _expand_softs(self, r_intervals):
+        l, u, I = self._get_index_functions()
+        for interval in r_intervals:
+            i_components = interval.split("_")
+            f_id = int(i_components[1])
+            l_idx = int(i_components[2])
+            u_idx = int(i_components[3])
+            reset_cardenc = False
+            if u_idx - l_idx > 1:
+                if I(f_id,l_idx+1,u_idx) not in self.active_softs[f_id]:
+                    self._add_soft(f_id,l_idx+1,u_idx)
+                    reset_cardenc = True
+                if I(f_id,l_idx,u_idx-1) not in self.active_softs[f_id]:
+                    self._add_soft(f_id,l_idx,u_idx-1)
+                    reset_cardenc = True
+            if reset_cardenc:
+                self._reset_cardenc(f_id)
+    
+    def _add_soft(self, i, j, k):
+        def w(i, j, k, factor):
+            d = self.fs_info.get_domain(i)
+            i_size = Decimal(d[k])-Decimal(d[j])
+            d_size = Decimal(d[-1])-Decimal(d[0])
+            return Decimal(log(i_size)) + Decimal(log(factor)) - Decimal(log(d_size))
 
-            if not f_id in self.active_softs.keys():
-                self.active_softs[f_id] = []
-            self.active_softs[f_id].append(var)
-            i += 1
-        self.card_encs = []
-        for f_id in self.active_softs.keys():
-            ivars = self.active_softs[f_id] 
-            self.card_encs += CardEnc.equals(ivars, vpool=self.vpool).clauses
-        self.current_level += 1
-        n_added = self.current_level*self.level_size
-        N = self.fs_info.n_pairs()
-        logging.info(f"Activated new clauses. Progress: {n_added}/{N} ({100*n_added/N:.2f}%)")
-        return True
+        l, u, I = self._get_index_functions()
+        self.wcnf.append([I(i,j,k)], weight=w(i,j,k, self.factor))
+        self.active_softs[i].add(I(i,j,k))
+
+    def _reset_cardenc(self, i):
+        card_cnf = CardEnc.equals(self.active_softs[i], vpool=self.vpool).clauses
+        self.card_encs[i] = card_cnf
 
     def get_seed(self) -> Region:
         with RC2(
@@ -81,19 +87,15 @@ class SeedGenerator(RC2Generator):
             minz=True,
             trim=True,
         ) as solver:
-            for c in self.card_encs:
-                solver.add_clause(c)
-            model = solver.compute()
-            while model is None:
-                solver.delete()
-                if not self._activate_intervals():
-                    return None
-                solver.init(self.wcnf, incr=True)
-                for c in self.card_encs:
+            for f_id in self.card_encs.keys():
+                for c in self.card_encs[f_id]:
                     solver.add_clause(c)
-                model = solver.compute()
+            model = solver.compute()
+            if model is None:
+                return None
             is_used_interval = lambda x: self.vpool.obj(x) and "I" in self.vpool.obj(x)
             intervals = [self.vpool.obj(x) for x in model if is_used_interval(x)]
+            self._expand_softs(intervals)
             bounds = {}
             for I in intervals:
                 I = I.split("_")
@@ -104,3 +106,6 @@ class SeedGenerator(RC2Generator):
                 bounds[f_id] = (d[l_idx], d[u_idx])
         return Region(bounds)
 
+    def block_up(self, r):
+        super().block_up(r)
+        

@@ -3,8 +3,9 @@ import sys
 import logging
 import pickle
 import numpy as np
+import pandas as pd
 
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from xgboost import XGBClassifier
 from ucimlrepo import fetch_ucirepo
 from pmlb import fetch_data as fetch_pmlb
@@ -134,15 +135,44 @@ def get_datasets(cache=False):
         datasets.append(dataset)
     return datasets
 
+def evaluate_model(name, dataset):
+    logging.info(f"Evaluating model {name}...")
+    X = dataset.data
+    y = dataset.target
+
+    clf = XGBClassifier()
+    clf.load_model(f"./models/{name}.json")
+    skf = StratifiedKFold(n_splits=5)
+    cv_scores = cross_val_score(clf, X, y, cv=skf, scoring="accuracy")
+    logging.info(f"{name}: {cv_scores.mean():.3f} +/- {cv_scores.std():.3f}")
+    return cv_scores
+
 def main():
     if "--cache" in sys.argv:
         datasets = get_datasets(cache=True)
     else:
         datasets = get_datasets()
 
-    for name, dataset in zip(list(UCI_DATASETS.values()) + PMLB_DATASETS, datasets):
-       create_model(name, dataset)
+    if "--create" in sys.argv:
+        for name, dataset in zip(list(UCI_DATASETS.values()) + PMLB_DATASETS, datasets):
+            create_model(name, dataset)
+    elif "--eval" in sys.argv:
+        model_scores = {}
+        for name, dataset in zip(list(UCI_DATASETS.values()) + PMLB_DATASETS, datasets):
+            model_scores[name] = evaluate_model(name, dataset)
+        scores_df = pd.DataFrame(model_scores)
+        scores_df = scores_df.agg(['mean', 'std'])
+        with open("model_eval.csv", "w") as f:
+            scores_df.to_csv(f, index=False)
+    else:
+        print("usage: python train_models.py --create | --eval [--cache]")
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    scores_df = pd.read_csv("model_eval2.csv")
+    scores_df = scores_df.T
+    scores_df = scores_df.reset_index()
+    scores_df = scores_df.rename(columns={"index": "model_name", 0: "accuracy", 1: "std"})
+    with open("model_eval2.csv", "w") as f:
+        scores_df.to_csv(f, index=False)
